@@ -32,3 +32,6 @@ src-tauri/binaries/wintun.dll
 # Temp/diagnostic files
 *.txt
 .vs/
+
+# Internal docs/plans
+docs/
