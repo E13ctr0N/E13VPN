@@ -1,7 +1,42 @@
-# Tauri + React + Typescript
+# E13VPN
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Легковесный VPN-клиент для Windows с поддержкой Proxy и TUN режимов.
 
-## Recommended IDE Setup
+Построен на актуальных версиях: Tauri v2, React 19, sing-box 1.13, Vite 7.
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+## Возможности
+
+- **Proxy VPN** — HTTP-прокси (127.0.0.1:2080)
+- **Полный VPN (TUN)** — весь системный трафик через туннель
+- Индикатор скорости соединения в реальном времени
+- Маршруты обхода по доменам, IP и приложениям
+- Лог sing-box с автопрокруткой
+- Динамическая иконка в трее
+- Управление VLESS-конфигами
+
+## Установка
+
+Скачайте последний релиз со страницы [Releases](../../releases) и установите `.msi` или запустите `.exe`.
+
+## Требования
+
+- Windows 10+
+- Права администратора (для TUN-режима)
+
+## Сборка из исходников
+
+```bash
+npm install
+npm run tauri build
+```
+
+## Стек
+
+| Компонент | Версия |
+|-----------|--------|
+| Tauri | v2 |
+| React | 19.1 |
+| sing-box | 1.13.3 |
+| Vite | 7 |
+| TypeScript | 5.8 |
+| Tailwind CSS | 4.2 |
