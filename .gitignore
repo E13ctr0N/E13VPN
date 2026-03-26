@@ -35,3 +35,6 @@ src-tauri/binaries/wintun.dll
 
 # Internal docs/plans
 docs/
+
+# Diagnostic scripts
+test-tun.bat
