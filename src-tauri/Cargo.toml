@@ -25,8 +25,14 @@ tauri-plugin-shell = "2"
 tauri-plugin-clipboard-manager = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
-windows-sys = { version = "0.60", features = ["Win32_Networking_WinInet"] }
+windows-sys = { version = "0.60", features = [
+    "Win32_Networking_WinInet",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_Foundation",
+] }
 

@@ -58,8 +58,35 @@ fn normalize_flow(raw: &str) -> String {
     s.to_string()
 }
 
+/// Проверяет формат UUID (8-4-4-4-12 hex)
+fn is_valid_uuid(s: &str) -> bool {
+    if s.len() != 36 {
+        return false;
+    }
+    let parts: Vec<&str> = s.split('-').collect();
+    if parts.len() != 5 {
+        return false;
+    }
+    let expected_lens = [8, 4, 4, 4, 12];
+    parts.iter().zip(expected_lens.iter()).all(|(part, &len)| {
+        part.len() == len && part.chars().all(|c| c.is_ascii_hexdigit())
+    })
+}
+
+/// Допустимые значения параметра security
+const ALLOWED_SECURITY: &[&str] = &["reality", "tls", "none", ""];
+
+/// Допустимые значения параметра flow (после нормализации)
+const ALLOWED_FLOW: &[&str] = &["", "xtls-rprx-vision"];
+
 pub fn parse_vless_uri(uri: &str) -> Result<VlessParams, String> {
     let uri = uri.trim();
+
+    // Проверка максимальной длины (защита от DoS)
+    if uri.len() > 10240 {
+        return Err("URI слишком длинный (макс. 10 КБ)".into());
+    }
+
     if !uri.starts_with("vless://") {
         return Err("не является vless:// URI".into());
     }
@@ -77,6 +104,14 @@ pub fn parse_vless_uri(uri: &str) -> Result<VlessParams, String> {
         .split_once('@')
         .ok_or("неверный формат: нет @")?;
 
+    // Валидация UUID
+    if !is_valid_uuid(uuid) {
+        return Err(format!(
+            "неверный UUID: ожидается формат xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx, получено: {}",
+            if uuid.len() > 50 { &uuid[..50] } else { uuid }
+        ));
+    }
+
     let (hostport, query) = if let Some(idx) = rest.find('?') {
         (&rest[..idx], &rest[idx + 1..])
     } else {
@@ -91,21 +126,42 @@ pub fn parse_vless_uri(uri: &str) -> Result<VlessParams, String> {
         .parse::<u16>()
         .map_err(|_| format!("неверный порт: {port_s}"))?;
 
+    // Порт 0 недопустим
+    if port == 0 {
+        return Err("порт не может быть 0".into());
+    }
+
     let params: HashMap<&str, &str> = query
         .split('&')
         .filter_map(|kv| kv.split_once('='))
         .collect();
 
+    let security = params.get("security").unwrap_or(&"none").to_string();
+    if !ALLOWED_SECURITY.contains(&security.as_str()) {
+        return Err(format!(
+            "неподдерживаемое значение security: '{}' (допустимо: reality, tls, none)",
+            security
+        ));
+    }
+
+    let flow = normalize_flow(params.get("flow").unwrap_or(&""));
+    if !ALLOWED_FLOW.contains(&flow.as_str()) {
+        return Err(format!(
+            "неподдерживаемое значение flow: '{}' (допустимо: пусто, xtls-rprx-vision)",
+            flow
+        ));
+    }
+
     Ok(VlessParams {
         uuid: uuid.to_string(),
         host: host.to_string(),
         port,
-        security: params.get("security").unwrap_or(&"none").to_string(),
+        security,
         sni: params.get("sni").unwrap_or(&"").to_string(),
         fingerprint: params.get("fp").unwrap_or(&"chrome").to_string(),
         public_key: params.get("pbk").unwrap_or(&"").to_string(),
         short_id: params.get("sid").unwrap_or(&"").to_string(),
-        flow: normalize_flow(params.get("flow").unwrap_or(&"")),
+        flow,
         name,
     })
 }
@@ -118,6 +174,21 @@ fn is_network_entry(s: &str) -> bool {
     }
     // Bare IP address
     s.parse::<IpAddr>().is_ok()
+}
+
+/// Валидация доменного имени по RFC 1035
+fn is_valid_domain(s: &str) -> bool {
+    if s.is_empty() || s.len() > 253 {
+        return false;
+    }
+    let s = s.strip_suffix('.').unwrap_or(s);
+    s.split('.').all(|label| {
+        !label.is_empty()
+            && label.len() <= 63
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+    })
 }
 
 /// Нормализация записи маршрута: извлекает домен из URL, убирает trailing slash/пробелы
@@ -150,13 +221,17 @@ fn build_route(
         rules.push(serde_json::json!({ "protocol": "dns", "action": "hijack-dns" }));
     }
 
-    // bypass sites → direct
+    // bypass sites → direct (с валидацией доменов по RFC 1035)
     let norm_bypass: Vec<String> = bypass.iter().map(|s| normalize_entry(s)).collect();
     if !norm_bypass.is_empty() {
         let (nets, domains): (Vec<_>, Vec<_>) =
             norm_bypass.iter().partition(|s| is_network_entry(s));
-        if !domains.is_empty() {
-            rules.push(serde_json::json!({ "outbound": "direct", "domain_suffix": domains }));
+        let valid_domains: Vec<_> = domains
+            .into_iter()
+            .filter(|d| is_valid_domain(d))
+            .collect();
+        if !valid_domains.is_empty() {
+            rules.push(serde_json::json!({ "outbound": "direct", "domain_suffix": valid_domains }));
         }
         if !nets.is_empty() {
             rules.push(serde_json::json!({ "outbound": "direct", "ip_cidr": nets }));
@@ -193,9 +268,13 @@ fn build_dns(bypass: &[String], mode: &VpnMode) -> serde_json::Value {
         let norm: Vec<String> = bypass.iter().map(|s| normalize_entry(s)).collect();
         let (_, domains): (Vec<_>, Vec<_>) =
             norm.iter().partition(|s| is_network_entry(s));
-        if !domains.is_empty() {
+        let valid_domains: Vec<_> = domains
+            .into_iter()
+            .filter(|d| is_valid_domain(d))
+            .collect();
+        if !valid_domains.is_empty() {
             rules.push(serde_json::json!({
-                "domain_suffix": domains,
+                "domain_suffix": valid_domains,
                 "server": "dns-direct"
             }));
         }

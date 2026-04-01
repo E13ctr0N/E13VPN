@@ -1,6 +1,7 @@
 mod vpn;
 
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
@@ -10,9 +11,14 @@ use tauri::{
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
+/// SHA256-хеш эталонного sing-box бинарника (v1.13.3, x86_64-pc-windows-msvc)
+const EXPECTED_SINGBOX_SHA256: &str =
+    "6325205ff2dd0a3046edbad492714621a4f5af80a0a18c915a5976fa07e9c377";
+
 struct VpnState {
     process: Mutex<Option<CommandChild>>,
     mode: Mutex<vpn::VpnMode>,
+    last_command: Mutex<Instant>,
 }
 
 /// Убить осиротевшие sing-box процессы (если предыдущий запуск крашнулся)
@@ -25,6 +31,65 @@ fn kill_orphan_singbox() {
             .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .output();
     }
+}
+
+/// Проверяет SHA256-хеш sing-box бинарника перед запуском
+fn verify_singbox_binary(path: &std::path::Path) -> Result<(), String> {
+    use sha2::{Sha256, Digest};
+
+    let data = std::fs::read(path)
+        .map_err(|e| format!("не удалось прочитать sing-box бинарник: {e}"))?;
+    let hash = format!("{:x}", Sha256::digest(&data));
+
+    if hash != EXPECTED_SINGBOX_SHA256 {
+        return Err(format!(
+            "sing-box не прошёл проверку целостности: ожидался {}, получен {}",
+            EXPECTED_SINGBOX_SHA256, hash
+        ));
+    }
+    Ok(())
+}
+
+/// Проверяет, запущен ли процесс с правами администратора (Windows)
+#[cfg(windows)]
+fn is_elevated() -> bool {
+    use windows_sys::Win32::Security::{
+        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+    };
+    use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
+
+    unsafe {
+        let mut token = std::mem::zeroed();
+        if OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) == 0 {
+            return false;
+        }
+        let mut elevation: TOKEN_ELEVATION = std::mem::zeroed();
+        let mut size = 0u32;
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            &mut elevation as *mut _ as *mut _,
+            std::mem::size_of::<TOKEN_ELEVATION>() as u32,
+            &mut size,
+        );
+        let _ = windows_sys::Win32::Foundation::CloseHandle(token);
+        ok != 0 && elevation.TokenIsElevated != 0
+    }
+}
+
+#[cfg(not(windows))]
+fn is_elevated() -> bool {
+    true
+}
+
+/// Проверяет rate limit: не чаще 1 команды в 500мс
+fn check_rate_limit(state: &VpnState) -> Result<(), String> {
+    let mut last = state.last_command.lock().unwrap_or_else(|e| e.into_inner());
+    if last.elapsed() < Duration::from_millis(500) {
+        return Err("слишком частые команды, подождите".into());
+    }
+    *last = Instant::now();
+    Ok(())
 }
 
 /// Ждём готовности порта sing-box (TCP connect check)
@@ -71,7 +136,13 @@ async fn start_vpn(
     bypass_apps: Vec<String>,
     mode: String,
 ) -> Result<(), String> {
+    check_rate_limit(&state)?;
+
     let vpn_mode = vpn::VpnMode::from_str(&mode);
+
+    if vpn_mode == vpn::VpnMode::Tun && !is_elevated() {
+        return Err("TUN-режим требует запуска от администратора".into());
+    }
 
     let params = vpn::parse_vless_uri(&uri)?;
 
@@ -131,6 +202,29 @@ async fn start_vpn(
 
     // Убиваем осиротевшие процессы (из прошлых сессий)
     kill_orphan_singbox();
+
+    // SHA256 проверка sing-box перед запуском
+    {
+        let sidecar_path = app
+            .path()
+            .resource_dir()
+            .map_err(|e| e.to_string())?
+            .join("binaries")
+            .join("sing-box-x86_64-pc-windows-msvc.exe");
+        // Проверяем оба возможных пути: resource/binaries и рядом с exe
+        let paths_to_check = {
+            let mut v = vec![sidecar_path];
+            if let Ok(exe) = std::env::current_exe() {
+                if let Some(dir) = exe.parent() {
+                    v.push(dir.join("sing-box-x86_64-pc-windows-msvc.exe"));
+                }
+            }
+            v
+        };
+        if let Some(binary_path) = paths_to_check.iter().find(|p| p.exists()) {
+            verify_singbox_binary(binary_path)?;
+        }
+    }
 
     let config_str = config_path
         .to_str()
@@ -218,6 +312,7 @@ async fn update_tray_icon(app: AppHandle, connected: bool) -> Result<(), String>
 
 #[tauri::command]
 async fn stop_vpn(state: State<'_, VpnState>) -> Result<(), String> {
+    check_rate_limit(&state)?;
     let mut guard = state.process.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(child) = guard.take() {
         child.kill().map_err(|e| e.to_string())?;
@@ -235,6 +330,7 @@ pub fn run() {
         .manage(VpnState {
             process: Mutex::new(None),
             mode: Mutex::new(vpn::VpnMode::Proxy),
+            last_command: Mutex::new(Instant::now() - Duration::from_secs(1)),
         })
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
