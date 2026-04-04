@@ -111,8 +111,10 @@ const EXPECTED_SINGBOX_SHA256: &str =
 
 struct VpnState {
     process: Mutex<Option<CommandChild>>,
+    pid: Mutex<Option<u32>>,
     mode: Mutex<vpn::VpnMode>,
     last_command: Mutex<Instant>,
+    last_tun_stop: Mutex<Option<Instant>>,
 }
 
 /// Убить осиротевшие sing-box процессы (если предыдущий запуск крашнулся)
@@ -544,8 +546,10 @@ pub fn run() {
     tauri::Builder::default()
         .manage(VpnState {
             process: Mutex::new(None),
+            pid: Mutex::new(None),
             mode: Mutex::new(vpn::VpnMode::Proxy),
             last_command: Mutex::new(Instant::now() - Duration::from_secs(1)),
+            last_tun_stop: Mutex::new(None),
         })
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_shell::init())
