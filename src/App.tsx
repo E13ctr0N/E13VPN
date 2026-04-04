@@ -30,7 +30,6 @@ function App() {
           <VpnScreen
             connected={connected}
             setConnected={setConnected}
-            logLines={logLines}
             setLogLines={setLogLines}
           />
         </div>

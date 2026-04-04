@@ -24,11 +24,10 @@ function parseConfigName(uri: string): string {
 interface VpnScreenProps {
   connected: boolean;
   setConnected: (v: boolean) => void;
-  logLines: string[];
   setLogLines: React.Dispatch<React.SetStateAction<string[]>>;
 }
 
-export function VpnScreen({ connected, setConnected, logLines, setLogLines }: VpnScreenProps) {
+export function VpnScreen({ connected, setConnected, setLogLines }: VpnScreenProps) {
   const [configs, setConfigs] = useState<VlessConfig[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
