@@ -2,17 +2,17 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const win = getCurrentWindow();
 
-export function Titlebar() {
+export function Titlebar({ connected }: { connected?: boolean }) {
   return (
     <div
       data-tauri-drag-region
       style={{
-        height: "32px",
+        height: "36px",
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
-        padding: "0 12px 0 16px",
-        background: "var(--color-surface)",
+        padding: "0 14px",
+        background: "var(--color-titlebar)",
         borderBottom: "1px solid var(--color-border)",
         flexShrink: 0,
       }}
@@ -20,81 +20,37 @@ export function Titlebar() {
       <span
         data-tauri-drag-region
         style={{
-          fontSize: "11px",
-          letterSpacing: "0.12em",
-          color: "var(--color-text-muted)",
-          textTransform: "uppercase",
+          fontSize: "12px",
+          fontWeight: 500,
+          color: connected ? "#777" : "#555",
+          transition: "color 0.3s",
         }}
       >
         E13VPN
       </span>
 
-      <div style={{ display: "flex", gap: "4px" }}>
-        <TitlebarBtn
-          title="Свернуть"
-          onClick={() => win.minimize()}
-          icon={
-            <svg width="10" height="2" viewBox="0 0 10 2" fill="none">
-              <line x1="0" y1="1" x2="10" y2="1" stroke="currentColor" strokeWidth="1.5" />
-            </svg>
-          }
-        />
-        <TitlebarBtn
-          title="Закрыть"
-          onClick={() => win.close()}
-          danger
-          icon={
-            <svg width="10" height="10" viewBox="0 0 10 10" fill="none">
-              <line x1="1" y1="1" x2="9" y2="9" stroke="currentColor" strokeWidth="1.5" />
-              <line x1="9" y1="1" x2="1" y2="9" stroke="currentColor" strokeWidth="1.5" />
-            </svg>
-          }
-        />
+      <div style={{ display: "flex", gap: "7px" }}>
+        <WinBtn onClick={() => win.minimize()} />
+        <WinBtn onClick={() => win.close()} danger />
       </div>
     </div>
   );
 }
 
-function TitlebarBtn({
-  onClick,
-  icon,
-  title,
-  danger,
-}: {
-  onClick: () => void;
-  icon: React.ReactNode;
-  title: string;
-  danger?: boolean;
-}) {
+function WinBtn({ onClick, danger }: { onClick: () => void; danger?: boolean }) {
   return (
-    <button
+    <div
       onClick={onClick}
-      title={title}
       style={{
-        width: "24px",
-        height: "24px",
-        border: "none",
-        borderRadius: "var(--radius-sm)",
-        background: "transparent",
-        color: "var(--color-text-muted)",
+        width: "10px",
+        height: "10px",
+        borderRadius: "50%",
+        background: danger ? "var(--color-danger)" : "var(--color-text-ghost)",
         cursor: "pointer",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        transition: "background 0.15s, color 0.15s",
+        transition: "opacity 0.15s",
       }}
-      onMouseEnter={(e) => {
-        e.currentTarget.style.background = danger
-          ? "var(--color-danger)"
-          : "var(--color-surface-2)";
-        e.currentTarget.style.color = danger ? "#fff" : "var(--color-text)";
-      }}
-      onMouseLeave={(e) => {
-        e.currentTarget.style.background = "transparent";
-        e.currentTarget.style.color = "var(--color-text-muted)";
-      }}
-    >
-      {icon}
-    </button>
+      onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.7")}
+      onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
+    />
   );
 }
