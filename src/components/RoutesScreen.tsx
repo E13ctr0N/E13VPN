@@ -1,9 +1,11 @@
 import { useState, useEffect, useRef } from "react";
 import { load as loadStore, Store } from "@tauri-apps/plugin-store";
+import { useT } from "../i18n";
 
 const STORE_FILE = "vpn.json";
 
 export function RoutesScreen() {
+  const t = useT();
   const [bypass, setBypass] = useState<string[]>([]);
   const [bypassApps, setBypassApps] = useState<string[]>([]);
   const [inputSites, setInputSites] = useState("");
@@ -53,17 +55,19 @@ export function RoutesScreen() {
       {/* Two-column list */}
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
         <RouteColumn
-          title="Мимо VPN (сайты)"
+          title={t("routes.sites")}
           accent="var(--color-text-muted)"
           entries={bypass}
           onRemove={(i) => setBypass((prev) => prev.filter((_, idx) => idx !== i))}
+          emptyText={t("routes.empty")}
         />
         <div style={{ width: "1px", background: "var(--color-border)", flexShrink: 0 }} />
         <RouteColumn
-          title="Мимо VPN (приложения)"
+          title={t("routes.apps")}
           accent="var(--color-text-muted)"
           entries={bypassApps}
           onRemove={(i) => setBypassApps((prev) => prev.filter((_, idx) => idx !== i))}
+          emptyText={t("routes.empty")}
         />
       </div>
 
@@ -85,7 +89,7 @@ export function RoutesScreen() {
           value={inputSites}
           onChange={setInputSites}
           onAdd={addSite}
-          placeholder="домен или IP/CIDR"
+          placeholder={t("routes.site_placeholder")}
           color="var(--color-text-muted)"
         />
         {/* Apps input */}
@@ -94,7 +98,7 @@ export function RoutesScreen() {
           value={inputApps}
           onChange={setInputApps}
           onAdd={addApp}
-          placeholder="chrome.exe"
+          placeholder={t("routes.app_placeholder")}
           color="var(--color-text-muted)"
         />
       </div>
@@ -149,7 +153,7 @@ function InputRow({
           border: "none",
           borderRadius: "var(--radius-sm)",
           background: "var(--color-text-muted)",
-          color: "#111",
+          color: "var(--color-btn-text)",
           cursor: "pointer",
           fontFamily: "var(--font-system)",
           fontSize: "16px",
@@ -174,11 +178,13 @@ function RouteColumn({
   accent,
   entries,
   onRemove,
+  emptyText,
 }: {
   title: string;
   accent: string;
   entries: string[];
   onRemove: (i: number) => void;
+  emptyText: string;
 }) {
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -187,7 +193,6 @@ function RouteColumn({
           padding: "6px 10px",
           fontSize: "9px",
           letterSpacing: "0.12em",
-          textTransform: "uppercase",
           color: accent,
           borderBottom: "1px solid var(--color-border)",
           background: "var(--color-surface)",
@@ -208,7 +213,7 @@ function RouteColumn({
               textAlign: "center",
             }}
           >
-            пусто
+            {emptyText}
           </div>
         ) : (
           entries.map((entry, i) => (

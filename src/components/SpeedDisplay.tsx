@@ -10,8 +10,8 @@ interface SpeedDisplayProps {
 }
 
 export function SpeedDisplay({ speed, active }: SpeedDisplayProps) {
-  const color = active ? "var(--color-text-tertiary)" : "var(--color-text-ghost)";
-  const arrowColor = active ? "var(--color-text-secondary)" : "var(--color-text-ghost)";
+  const color = active ? "var(--color-speed)" : "var(--color-speed)";
+  const arrowColor = active ? "var(--color-speed-arrow)" : "var(--color-speed-arrow)";
 
   return (
     <div style={{ display: "flex", gap: "16px" }}>

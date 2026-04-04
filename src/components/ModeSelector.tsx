@@ -1,3 +1,5 @@
+import { useT } from "../i18n";
+
 interface ModeSelectorProps {
   mode: "proxy" | "tun";
   onChange: (m: "proxy" | "tun") => void;
@@ -5,10 +7,11 @@ interface ModeSelectorProps {
 }
 
 export function ModeSelector({ mode, onChange, disabled }: ModeSelectorProps) {
+  const t = useT();
   return (
     <div style={{ display: "flex", gap: "2px" }}>
-      <ModeBtn label="Proxy" active={mode === "proxy"} disabled={disabled} onClick={() => onChange("proxy")} />
-      <ModeBtn label="TUN" active={mode === "tun"} disabled={disabled} onClick={() => onChange("tun")} />
+      <ModeBtn label={t("vpn.mode_proxy")} active={mode === "proxy"} disabled={disabled} onClick={() => onChange("proxy")} />
+      <ModeBtn label={t("vpn.mode_tun")} active={mode === "tun"} disabled={disabled} onClick={() => onChange("tun")} />
     </div>
   );
 }
@@ -30,6 +33,8 @@ function ModeBtn({ label, active, disabled, onClick }: { label: string; active: 
         opacity: disabled ? 0.5 : 1,
         transition: "background 0.15s, color 0.15s",
       }}
+      onMouseEnter={(e) => { if (!disabled && !active) e.currentTarget.style.background = "var(--color-surface)"; }}
+      onMouseLeave={(e) => { if (!active) e.currentTarget.style.background = "transparent"; }}
     >
       {label}
     </button>

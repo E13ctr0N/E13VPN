@@ -5,9 +5,9 @@ interface PowerButtonProps {
 }
 
 export function PowerButton({ state, onClick, disabled }: PowerButtonProps) {
-  const arcStroke = state === "on" ? "#555" : "#222";
+  const arcStroke = state === "on" ? "var(--color-power-arc-on)" : "var(--color-power-arc)";
   const lineStroke =
-    state === "on" ? "#e8e8e8" : state === "connecting" ? "#666" : "#333";
+    state === "on" ? "var(--color-power-line-on)" : state === "connecting" ? "var(--color-power-line-connecting)" : "var(--color-power-line-off)";
   const lineWidth = state === "on" ? 2 : 1.5;
   const cursor = disabled ? "not-allowed" : "pointer";
 
@@ -56,7 +56,7 @@ export function PowerButton({ state, onClick, disabled }: PowerButtonProps) {
         >
           <line
             x1="40" y1="12" x2="40" y2="30"
-            stroke="#888"
+            stroke="var(--color-power-pulse)"
             strokeWidth="2"
             strokeLinecap="round"
           />

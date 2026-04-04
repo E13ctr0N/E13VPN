@@ -11,6 +11,100 @@ use tauri::{
 use tauri_plugin_shell::process::CommandChild;
 use tauri_plugin_shell::ShellExt;
 
+/// Убирает нативную рамку DWM и стили окна (borderless transparent window)
+#[cfg(windows)]
+fn apply_dwm_borderless(hwnd: windows_sys::Win32::Foundation::HWND) {
+    use windows_sys::Win32::Graphics::Dwm::{
+        DwmSetWindowAttribute, DwmExtendFrameIntoClientArea,
+        DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_ROUND,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SetWindowLongPtrW, GetWindowLongPtrW, SetWindowPos,
+        GWL_STYLE, WS_CAPTION, WS_THICKFRAME, WS_BORDER,
+        SWP_FRAMECHANGED, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    };
+
+    unsafe {
+        // Strip all frame styles
+        let style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        SetWindowLongPtrW(
+            hwnd,
+            GWL_STYLE,
+            style & !(WS_CAPTION as isize) & !(WS_THICKFRAME as isize) & !(WS_BORDER as isize),
+        );
+
+        // Force window to apply new style
+        SetWindowPos(
+            hwnd,
+            std::ptr::null_mut(),
+            0, 0, 0, 0,
+            SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER,
+        );
+
+        // Zero margins — tell DWM "no frame extension"
+        // IMPORTANT: -1 margins cause a white top border on Win10!
+        let margins = windows_sys::Win32::UI::Controls::MARGINS {
+            cxLeftWidth: 0,
+            cxRightWidth: 0,
+            cyTopHeight: 0,
+            cyBottomHeight: 0,
+        };
+        DwmExtendFrameIntoClientArea(hwnd, &margins);
+
+        // Rounded corners (Windows 11 only, harmless on Win10)
+        let preference = DWMWCP_ROUND;
+        let _ = DwmSetWindowAttribute(
+            hwnd,
+            DWMWA_WINDOW_CORNER_PREFERENCE as u32,
+            &preference as *const _ as *const _,
+            std::mem::size_of_val(&preference) as u32,
+        );
+    }
+}
+
+/// Subclass proc: перехватывает WM_NCACTIVATE и WM_NCPAINT,
+/// чтобы Windows не рисовал артефакты рамки при потере фокуса.
+#[cfg(windows)]
+unsafe extern "system" fn borderless_subclass_proc(
+    hwnd: windows_sys::Win32::Foundation::HWND,
+    msg: u32,
+    wparam: usize,
+    lparam: isize,
+    _uid_subclass: usize,
+    _ref_data: usize,
+) -> isize {
+    const WM_NCACTIVATE: u32 = 0x0086;
+    const WM_NCPAINT: u32 = 0x0085;
+
+    match msg {
+        WM_NCACTIVATE => {
+            // Принимаем смену активности, но НЕ передаём DefWindowProc —
+            // это предотвращает перерисовку non-client area (белые углы).
+            return 1;
+        }
+        WM_NCPAINT => {
+            // Полностью подавляем отрисовку non-client area.
+            return 0;
+        }
+        _ => {}
+    }
+
+    windows_sys::Win32::UI::Shell::DefSubclassProc(hwnd, msg, wparam, lparam)
+}
+
+/// Устанавливает subclass для перехвата WM_NCACTIVATE/WM_NCPAINT
+#[cfg(windows)]
+fn install_borderless_subclass(hwnd: windows_sys::Win32::Foundation::HWND) {
+    unsafe {
+        windows_sys::Win32::UI::Shell::SetWindowSubclass(
+            hwnd,
+            Some(borderless_subclass_proc),
+            1, // subclass ID
+            0, // ref data
+        );
+    }
+}
+
 /// SHA256-хеш эталонного sing-box бинарника (v1.13.3, x86_64-pc-windows-msvc)
 const EXPECTED_SINGBOX_SHA256: &str =
     "6325205ff2dd0a3046edbad492714621a4f5af80a0a18c915a5976fa07e9c377";
@@ -336,7 +430,21 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(|app| {
+            // Apply DWM borderless fix + install subclass to prevent white corners on focus loss
+            #[cfg(windows)]
+            {
+                if let Some(win) = app.get_webview_window("main") {
+                    let hwnd = win.hwnd().unwrap().0 as windows_sys::Win32::Foundation::HWND;
+                    apply_dwm_borderless(hwnd);
+                    install_borderless_subclass(hwnd);
+                }
+            }
+
             let show_i = MenuItem::with_id(app, "show", "Показать", true, None::<&str>)?;
             let quit_i = MenuItem::with_id(app, "quit", "Выход", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&show_i, &quit_i])?;

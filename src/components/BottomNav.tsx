@@ -1,4 +1,6 @@
-export type Tab = "vpn" | "routes" | "logs";
+import { useT } from "../i18n";
+
+export type Tab = "vpn" | "routes" | "logs" | "settings";
 
 interface BottomNavProps {
   active: Tab;
@@ -6,6 +8,8 @@ interface BottomNavProps {
 }
 
 export function BottomNav({ active, onChange }: BottomNavProps) {
+  const t = useT();
+
   return (
     <div
       style={{
@@ -14,14 +18,15 @@ export function BottomNav({ active, onChange }: BottomNavProps) {
         alignItems: "center",
         justifyContent: "center",
         gap: "24px",
-        borderTop: "1px solid #161616",
+        borderTop: "1px solid var(--color-border)",
         background: "var(--color-titlebar)",
         flexShrink: 0,
       }}
     >
-      <NavItem label="VPN" active={active === "vpn"} onClick={() => onChange("vpn")} />
-      <NavItem label="Routes" active={active === "routes"} onClick={() => onChange("routes")} />
-      <NavItem label="Logs" active={active === "logs"} onClick={() => onChange("logs")} />
+      <NavItem label={t("nav.vpn")} active={active === "vpn"} onClick={() => onChange("vpn")} />
+      <NavItem label={t("nav.routes")} active={active === "routes"} onClick={() => onChange("routes")} />
+      <NavItem label={t("nav.logs")} active={active === "logs"} onClick={() => onChange("logs")} />
+      <NavItem label={t("nav.settings")} active={active === "settings"} onClick={() => onChange("settings")} />
     </div>
   );
 }
@@ -38,6 +43,8 @@ function NavItem({ label, active, onClick }: { label: string; active: boolean; o
         paddingBottom: "1px",
         transition: "color 0.15s, border-color 0.15s",
       }}
+      onMouseEnter={(e) => { if (!active) e.currentTarget.style.color = "var(--color-text-muted)"; }}
+      onMouseLeave={(e) => { if (!active) e.currentTarget.style.color = "var(--color-text-dim)"; }}
     >
       {label}
     </span>

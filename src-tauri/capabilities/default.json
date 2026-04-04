@@ -14,6 +14,11 @@
       "identifier": "shell:allow-execute",
       "allow": [{ "name": "sing-box", "sidecar": true, "args": true }]
     },
-    "shell:allow-kill"
+    "shell:allow-kill",
+    "autostart:allow-enable",
+    "autostart:allow-disable",
+    "autostart:allow-is-enabled",
+    "core:window:allow-set-size",
+    "core:window:allow-scale-factor"
   ]
 }

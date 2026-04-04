@@ -7,6 +7,7 @@ import { PowerButton } from "./PowerButton";
 import { SpeedDisplay } from "./SpeedDisplay";
 import { ModeSelector } from "./ModeSelector";
 import { ConfigList, VlessConfig } from "./ConfigList";
+import { useT } from "../i18n";
 
 const STORE_FILE = "vpn.json";
 
@@ -25,9 +26,11 @@ interface VpnScreenProps {
   connected: boolean;
   setConnected: (v: boolean) => void;
   setLogLines: React.Dispatch<React.SetStateAction<string[]>>;
+  autoReconnect?: boolean;
 }
 
-export function VpnScreen({ connected, setConnected, setLogLines }: VpnScreenProps) {
+export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect }: VpnScreenProps) {
+  const t = useT();
   const [configs, setConfigs] = useState<VlessConfig[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -36,7 +39,10 @@ export function VpnScreen({ connected, setConnected, setLogLines }: VpnScreenPro
   const [speed, setSpeed] = useState<{ down: number; up: number } | null>(null);
   const [connectTime, setConnectTime] = useState<number | null>(null);
   const [elapsed, setElapsed] = useState("—");
+  const [reconnecting, setReconnecting] = useState(false);
   const storeRef = useRef<Store | null>(null);
+  const manualDisconnect = useRef(false);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Load store
   useEffect(() => {
@@ -103,9 +109,44 @@ export function VpnScreen({ connected, setConnected, setLogLines }: VpnScreenPro
       setConnectTime(null);
       invoke("update_tray_icon", { connected: false }).catch(() => {});
       setLogLines((prev) => [...prev, `[terminated] ${e.payload}`]);
+
+      // Auto-reconnect if enabled and not manual disconnect
+      if (autoReconnect && !manualDisconnect.current) {
+        setReconnecting(true);
+        setLogLines((prev) => [...prev, "[auto-reconnect] retrying in 3s..."]);
+        reconnectTimer.current = setTimeout(() => {
+          setReconnecting(false);
+          // Trigger reconnect by simulating connect
+          const doReconnect = async () => {
+            const store = storeRef.current ?? await loadStore(STORE_FILE, { autoSave: false, defaults: {} });
+            const savedActiveId = await store.get<string>("activeId");
+            const savedConfigs = await store.get<VlessConfig[]>("configs") ?? [];
+            const cfg = savedConfigs.find((c) => c.id === savedActiveId);
+            if (!cfg) return;
+            const bypassVpn = (await store.get<string[]>("routes_bypass")) ?? [];
+            const bypassApps = (await store.get<string[]>("routes_bypass_apps")) ?? [];
+            const mode = (await store.get<string>("vpn_mode")) ?? "proxy";
+            try {
+              setLogLines((prev) => [...prev, "[auto-reconnect] connecting..."]);
+              await invoke("start_vpn", { uri: cfg.uri, bypassVpn, bypassApps, mode });
+              setConnected(true);
+              setConnectTime(Date.now());
+              invoke("update_tray_icon", { connected: true }).catch(() => {});
+            } catch (err) {
+              setLogLines((prev) => [...prev, `[auto-reconnect] failed: ${String(err)}`]);
+            }
+          };
+          doReconnect();
+        }, 3000);
+      }
+      manualDisconnect.current = false;
     });
-    return () => { unlistenLog.then((f) => f()); unlistenTerm.then((f) => f()); };
-  }, [setConnected, setLogLines]);
+    return () => {
+      unlistenLog.then((f) => f());
+      unlistenTerm.then((f) => f());
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+    };
+  }, [setConnected, setLogLines, autoReconnect]);
 
   // Save on change
   useEffect(() => {
@@ -163,6 +204,9 @@ export function VpnScreen({ connected, setConnected, setLogLines }: VpnScreenPro
         setConnectTime(Date.now());
         invoke("update_tray_icon", { connected: true }).catch(() => {});
       } else {
+        manualDisconnect.current = true;
+        if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+        setReconnecting(false);
         await invoke("stop_vpn");
         setConnected(false);
         setConnectTime(null);
@@ -175,9 +219,9 @@ export function VpnScreen({ connected, setConnected, setLogLines }: VpnScreenPro
     }
   }
 
-  const powerState = busy ? "connecting" : connected ? "on" : "off";
-  const statusText = busy ? "Connecting..." : connected ? "Connected" : "Disconnected";
-  const statusColor = busy
+  const powerState = busy || reconnecting ? "connecting" : connected ? "on" : "off";
+  const statusText = reconnecting ? t("vpn.reconnecting") : busy ? t("vpn.connecting") : connected ? t("vpn.connected") : t("vpn.disconnected");
+  const statusColor = busy || reconnecting
     ? "var(--color-text-tertiary)"
     : connected
     ? "var(--color-text-secondary)"

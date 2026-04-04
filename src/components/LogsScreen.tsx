@@ -1,10 +1,12 @@
 import { useEffect, useRef } from "react";
+import { useT } from "../i18n";
 
 interface LogsScreenProps {
   logLines: string[];
 }
 
 export function LogsScreen({ logLines }: LogsScreenProps) {
+  const t = useT();
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -35,7 +37,7 @@ export function LogsScreen({ logLines }: LogsScreenProps) {
           }}
         >
           <span style={{ fontSize: "10px", color: "var(--color-text-dim)" }}>
-            no logs yet
+            {t("logs.empty")}
           </span>
         </div>
       ) : (

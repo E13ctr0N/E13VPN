@@ -22,7 +22,7 @@ export function Titlebar({ connected }: { connected?: boolean }) {
         style={{
           fontSize: "12px",
           fontWeight: 500,
-          color: connected ? "#777" : "#555",
+          color: connected ? "var(--color-text-tertiary)" : "var(--color-text-muted)",
           transition: "color 0.3s",
         }}
       >

@@ -1,3 +1,5 @@
+import { useT } from "../i18n";
+
 export interface VlessConfig {
   id: string;
   name: string;
@@ -25,34 +27,35 @@ interface ConfigListProps {
 }
 
 export function ConfigList({ configs, activeId, connected, onSelect, onRemove, onPaste }: ConfigListProps) {
+  const t = useT();
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px", overflow: "hidden" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
         <span style={{ fontSize: "9px", textTransform: "uppercase", letterSpacing: "1.5px", color: "var(--color-text-muted)", fontWeight: 600 }}>
-          Servers
+          {t("vpn.servers")}
         </span>
         <span
           onClick={connected ? undefined : onPaste}
           style={{
             fontSize: "9px",
-            color: "var(--color-text-muted)",
+            color: configs.length === 0 && !connected ? "var(--color-success-text)" : "var(--color-text-muted)",
             cursor: connected ? "default" : "pointer",
             padding: "2px 8px",
             borderRadius: "3px",
             opacity: connected ? 0.3 : 1,
-            transition: "opacity 0.15s",
+            transition: "color 0.3s, opacity 0.15s",
           }}
           onMouseEnter={(e) => { if (!connected) e.currentTarget.style.background = "var(--color-surface-hover)"; }}
           onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
         >
-          + Paste
+          {t("vpn.paste")}
         </span>
       </div>
 
       <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: "2px" }}>
         {configs.length === 0 ? (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <span style={{ fontSize: "10px", color: "var(--color-text-dim)" }}>paste vless:// config</span>
+            <span style={{ fontSize: "10px", color: "var(--color-text-dim)" }}>{t("vpn.paste_hint")}</span>
           </div>
         ) : (
           configs.map((cfg) => {
@@ -71,7 +74,7 @@ export function ConfigList({ configs, activeId, connected, onSelect, onRemove, o
                   padding: "9px 10px",
                   borderRadius: "6px",
                   cursor: connected ? "default" : "pointer",
-                  background: isActive ? (isConnected ? "#181818" : "var(--color-surface)") : "transparent",
+                  background: isActive ? (isConnected ? "var(--color-surface-active)" : "var(--color-surface)") : "transparent",
                   opacity: isDimmed ? 0.4 : 1,
                   transition: "background 0.1s, opacity 0.3s",
                 }}
