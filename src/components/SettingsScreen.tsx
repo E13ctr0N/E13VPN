@@ -93,25 +93,6 @@ export function SettingsScreen({
   );
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-      <div
-        style={{
-          fontSize: "9px",
-          textTransform: "uppercase",
-          letterSpacing: "0.12em",
-          color: "var(--color-text-muted)",
-          fontWeight: 600,
-          marginBottom: "6px",
-        }}
-      >
-        {title}
-      </div>
-      {children}
-    </div>
-  );
-}
 
 function SettingRow({
   label,

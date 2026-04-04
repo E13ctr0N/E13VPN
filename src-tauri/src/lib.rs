@@ -373,9 +373,12 @@ async fn start_vpn(
         }
     });
 
-    // В proxy-режиме ждём готовности порта перед включением прокси
+    // В proxy-режиме ждём готовности порта перед включением прокси (не блокируя async runtime)
     if vpn_mode == vpn::VpnMode::Proxy {
-        if !wait_for_port(2080, 5000) {
+        let port_ready = tauri::async_runtime::spawn_blocking(|| wait_for_port(2080, 5000))
+            .await
+            .unwrap_or(false);
+        if !port_ready {
             // sing-box не поднял порт за 5 секунд — откатываемся
             let mut guard = state.process.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(child) = guard.take() {
@@ -418,8 +421,120 @@ async fn stop_vpn(state: State<'_, VpnState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Шифрует строку через Windows DPAPI (привязано к пользователю)
+#[cfg(windows)]
+fn dpapi_protect(data: &[u8]) -> Result<Vec<u8>, String> {
+    use windows_sys::Win32::Security::Cryptography::{CryptProtectData, CRYPT_INTEGER_BLOB};
+    use windows_sys::Win32::Foundation::LocalFree;
+
+    let mut input = CRYPT_INTEGER_BLOB {
+        cbData: data.len() as u32,
+        pbData: data.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB { cbData: 0, pbData: std::ptr::null_mut() };
+
+    let ok = unsafe { CryptProtectData(&mut input, std::ptr::null(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null(), 0, &mut output) };
+    if ok == 0 {
+        return Err("DPAPI CryptProtectData failed".into());
+    }
+    let result = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
+    unsafe { LocalFree(output.pbData as *mut _) };
+    Ok(result)
+}
+
+/// Расшифровывает строку через Windows DPAPI
+#[cfg(windows)]
+fn dpapi_unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
+    use windows_sys::Win32::Security::Cryptography::{CryptUnprotectData, CRYPT_INTEGER_BLOB};
+    use windows_sys::Win32::Foundation::LocalFree;
+
+    let mut input = CRYPT_INTEGER_BLOB {
+        cbData: data.len() as u32,
+        pbData: data.as_ptr() as *mut u8,
+    };
+    let mut output = CRYPT_INTEGER_BLOB { cbData: 0, pbData: std::ptr::null_mut() };
+
+    let ok = unsafe { CryptUnprotectData(&mut input, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null(), 0, &mut output) };
+    if ok == 0 {
+        return Err("DPAPI CryptUnprotectData failed".into());
+    }
+    let result = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
+    unsafe { LocalFree(output.pbData as *mut _) };
+    Ok(result)
+}
+
+#[tauri::command]
+fn encrypt_string(value: String) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        let encrypted = dpapi_protect(value.as_bytes())?;
+        use base64::Engine;
+        Ok(base64::engine::general_purpose::STANDARD.encode(&encrypted))
+    }
+    #[cfg(not(windows))]
+    Ok(value)
+}
+
+#[tauri::command]
+fn update_tray_labels(app: AppHandle, show_label: String, quit_label: String) -> Result<(), String> {
+    // Rebuild tray menu with new labels
+    let show_i = MenuItem::with_id(&app, "show", &show_label, true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let quit_i = MenuItem::with_id(&app, "quit", &quit_label, true, None::<&str>)
+        .map_err(|e| e.to_string())?;
+    let menu = Menu::with_items(&app, &[&show_i, &quit_i])
+        .map_err(|e| e.to_string())?;
+    if let Some(tray) = app.tray_by_id("main") {
+        tray.set_menu(Some(menu)).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn decrypt_string(value: String) -> Result<String, String> {
+    #[cfg(windows)]
+    {
+        use base64::Engine;
+        let data = base64::engine::general_purpose::STANDARD.decode(&value).map_err(|e| e.to_string())?;
+        let decrypted = dpapi_unprotect(&data)?;
+        String::from_utf8(decrypted).map_err(|e| e.to_string())
+    }
+    #[cfg(not(windows))]
+    Ok(value)
+}
+
+/// Проверяет, остался ли наш прокси (127.0.0.1:2080) после краша, и сбрасывает его
+#[cfg(windows)]
+fn cleanup_stale_proxy() {
+    use winreg::enums::*;
+    use winreg::RegKey;
+
+    let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+    let path = r"Software\Microsoft\Windows\CurrentVersion\Internet Settings";
+    if let Ok(settings) = hkcu.open_subkey_with_flags(path, KEY_READ) {
+        let enabled: u32 = settings.get_value("ProxyEnable").unwrap_or(0);
+        let server: String = settings.get_value("ProxyServer").unwrap_or_default();
+        if enabled == 1 && server == "127.0.0.1:2080" {
+            // Наш прокси остался — сбрасываем
+            let _ = vpn::set_system_proxy(false);
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Сброс прокси если остался после краша
+    #[cfg(windows)]
+    cleanup_stale_proxy();
+
+    // Panic hook: сбросить прокси при панике
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = vpn::set_system_proxy(false);
+        kill_orphan_singbox();
+        default_hook(info);
+    }));
+
     tauri::Builder::default()
         .manage(VpnState {
             process: Mutex::new(None),
@@ -504,7 +619,7 @@ pub fn run() {
                 api.prevent_close();
             }
         })
-        .invoke_handler(tauri::generate_handler![start_vpn, stop_vpn, update_tray_icon])
+        .invoke_handler(tauri::generate_handler![start_vpn, stop_vpn, update_tray_icon, encrypt_string, decrypt_string, update_tray_labels])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

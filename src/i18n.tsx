@@ -42,6 +42,10 @@ const translations = {
   "settings.theme": { ru: "Тема", en: "Theme" },
   "settings.theme_dark": { ru: "Тёмная", en: "Dark" },
   "settings.theme_light": { ru: "Светлая", en: "Light" },
+
+  // Tray
+  "tray.show": { ru: "Показать", en: "Show" },
+  "tray.quit": { ru: "Выход", en: "Quit" },
 } as const;
 
 type Key = keyof typeof translations;

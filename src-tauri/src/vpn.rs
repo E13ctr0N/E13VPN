@@ -131,6 +131,12 @@ pub fn parse_vless_uri(uri: &str) -> Result<VlessParams, String> {
         return Err("порт не может быть 0".into());
     }
 
+    // Валидация host: должен быть IP-адрес или валидный домен
+    let clean_host = host.trim_matches(|c| c == '[' || c == ']'); // IPv6 brackets
+    if clean_host.parse::<IpAddr>().is_err() && !is_valid_domain(clean_host) {
+        return Err(format!("неверный хост: '{}'", if host.len() > 100 { &host[..100] } else { host }));
+    }
+
     let params: HashMap<&str, &str> = query
         .split('&')
         .filter_map(|kv| kv.split_once('='))

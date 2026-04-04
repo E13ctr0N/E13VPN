@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import { load as loadStore, Store } from "@tauri-apps/plugin-store";
 import { Titlebar } from "./components/Titlebar";
 import { VpnScreen } from "./components/VpnScreen";
@@ -67,6 +68,14 @@ function App() {
   useEffect(() => {
     document.documentElement.setAttribute("data-theme", theme);
   }, [theme]);
+
+  // Update tray labels on language change
+  useEffect(() => {
+    if (!ready) return;
+    const showLabel = lang === "ru" ? "Показать" : "Show";
+    const quitLabel = lang === "ru" ? "Выход" : "Quit";
+    invoke("update_tray_labels", { showLabel, quitLabel }).catch(() => {});
+  }, [lang, ready]);
 
   // Apply scale
   useEffect(() => {

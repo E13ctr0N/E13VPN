@@ -11,6 +11,28 @@ import { useT } from "../i18n";
 
 const STORE_FILE = "vpn.json";
 
+interface StoredConfig {
+  id: string;
+  name: string;
+  uri_encrypted: string;
+}
+
+async function encryptConfigs(configs: VlessConfig[]): Promise<StoredConfig[]> {
+  return Promise.all(configs.map(async (c) => ({
+    id: c.id,
+    name: c.name,
+    uri_encrypted: await invoke<string>("encrypt_string", { value: c.uri }),
+  })));
+}
+
+async function decryptConfigs(stored: StoredConfig[]): Promise<VlessConfig[]> {
+  return Promise.all(stored.map(async (c) => ({
+    id: c.id,
+    name: c.name,
+    uri: await invoke<string>("decrypt_string", { value: c.uri_encrypted }),
+  })));
+}
+
 function parseConfigName(uri: string): string {
   try {
     const fragment = new URL(uri).hash.slice(1);
@@ -43,15 +65,29 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
   const storeRef = useRef<Store | null>(null);
   const manualDisconnect = useRef(false);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectAttempt = useRef(0);
+  const MAX_RECONNECT_ATTEMPTS = 10;
 
   // Load store
   useEffect(() => {
     loadStore(STORE_FILE, { autoSave: false, defaults: {} }).then(async (store) => {
       storeRef.current = store;
-      const savedConfigs = (await store.get<VlessConfig[]>("configs")) ?? [];
+      // Try encrypted format first, fallback to legacy plaintext
+      const storedEncrypted = await store.get<StoredConfig[]>("configs_encrypted");
+      const legacyConfigs = await store.get<VlessConfig[]>("configs");
+      let loadedConfigs: VlessConfig[] = [];
+      if (storedEncrypted && storedEncrypted.length > 0) {
+        loadedConfigs = await decryptConfigs(storedEncrypted);
+      } else if (legacyConfigs && legacyConfigs.length > 0) {
+        // Migrate: encrypt and save, then remove plaintext
+        loadedConfigs = legacyConfigs;
+        await store.set("configs_encrypted", await encryptConfigs(legacyConfigs));
+        await store.delete("configs");
+        await store.save();
+      }
       const savedActiveId = (await store.get<string>("activeId")) ?? null;
       const savedMode = (await store.get<"proxy" | "tun">("vpn_mode")) ?? "proxy";
-      setConfigs(savedConfigs);
+      setConfigs(loadedConfigs);
       setActiveId(savedActiveId);
       setVpnMode(savedMode);
       setStoreReady(true);
@@ -110,34 +146,39 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
       invoke("update_tray_icon", { connected: false }).catch(() => {});
       setLogLines((prev) => [...prev, `[terminated] ${e.payload}`]);
 
-      // Auto-reconnect if enabled and not manual disconnect
+      // Auto-reconnect with exponential backoff (3s, 6s, 12s... max 10 attempts)
       if (autoReconnect && !manualDisconnect.current) {
-        setReconnecting(true);
-        setLogLines((prev) => [...prev, "[auto-reconnect] retrying in 3s..."]);
-        reconnectTimer.current = setTimeout(() => {
-          setReconnecting(false);
-          // Trigger reconnect by simulating connect
-          const doReconnect = async () => {
-            const store = storeRef.current ?? await loadStore(STORE_FILE, { autoSave: false, defaults: {} });
-            const savedActiveId = await store.get<string>("activeId");
-            const savedConfigs = await store.get<VlessConfig[]>("configs") ?? [];
-            const cfg = savedConfigs.find((c) => c.id === savedActiveId);
-            if (!cfg) return;
-            const bypassVpn = (await store.get<string[]>("routes_bypass")) ?? [];
-            const bypassApps = (await store.get<string[]>("routes_bypass_apps")) ?? [];
-            const mode = (await store.get<string>("vpn_mode")) ?? "proxy";
-            try {
-              setLogLines((prev) => [...prev, "[auto-reconnect] connecting..."]);
-              await invoke("start_vpn", { uri: cfg.uri, bypassVpn, bypassApps, mode });
-              setConnected(true);
-              setConnectTime(Date.now());
-              invoke("update_tray_icon", { connected: true }).catch(() => {});
-            } catch (err) {
-              setLogLines((prev) => [...prev, `[auto-reconnect] failed: ${String(err)}`]);
-            }
-          };
-          doReconnect();
-        }, 3000);
+        const attempt = reconnectAttempt.current;
+        if (attempt >= MAX_RECONNECT_ATTEMPTS) {
+          setLogLines((prev) => [...prev, `[auto-reconnect] gave up after ${MAX_RECONNECT_ATTEMPTS} attempts`]);
+          reconnectAttempt.current = 0;
+        } else {
+          const delay = Math.min(3000 * Math.pow(2, attempt), 60000); // 3s, 6s, 12s, 24s, 48s, 60s max
+          reconnectAttempt.current = attempt + 1;
+          setReconnecting(true);
+          setLogLines((prev) => [...prev, `[auto-reconnect] attempt ${attempt + 1}/${MAX_RECONNECT_ATTEMPTS} in ${Math.round(delay / 1000)}s...`]);
+          reconnectTimer.current = setTimeout(() => {
+            setReconnecting(false);
+            const doReconnect = async () => {
+              const cfg = configs.find((c) => c.id === activeId);
+              if (!cfg) return;
+              const store = storeRef.current ?? await loadStore(STORE_FILE, { autoSave: false, defaults: {} });
+              const bypassVpn = (await store.get<string[]>("routes_bypass")) ?? [];
+              const bypassApps = (await store.get<string[]>("routes_bypass_apps")) ?? [];
+              try {
+                setLogLines((prev) => [...prev, "[auto-reconnect] connecting..."]);
+                await invoke("start_vpn", { uri: cfg.uri, bypassVpn, bypassApps, mode: vpnMode });
+                setConnected(true);
+                setConnectTime(Date.now());
+                reconnectAttempt.current = 0; // Reset on success
+                invoke("update_tray_icon", { connected: true }).catch(() => {});
+              } catch (err) {
+                setLogLines((prev) => [...prev, `[auto-reconnect] failed: ${String(err)}`]);
+              }
+            };
+            doReconnect();
+          }, delay);
+        }
       }
       manualDisconnect.current = false;
     });
@@ -153,7 +194,7 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
     if (!storeReady || !storeRef.current) return;
     const store = storeRef.current;
     (async () => {
-      await store.set("configs", configs);
+      await store.set("configs_encrypted", await encryptConfigs(configs));
       await store.set("activeId", activeId);
       await store.set("vpn_mode", vpnMode);
       await store.save();
