@@ -122,9 +122,52 @@ fn kill_orphan_singbox() {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
+        // Сначала мягкий kill
+        let _ = std::process::Command::new("taskkill")
+            .args(["/IM", "sing-box-x86_64-pc-windows-msvc.exe"])
+            .creation_flags(0x08000000)
+            .output();
+        std::thread::sleep(Duration::from_secs(1));
+        // Потом force kill оставшихся
         let _ = std::process::Command::new("taskkill")
             .args(["/F", "/IM", "sing-box-x86_64-pc-windows-msvc.exe"])
-            .creation_flags(0x08000000) // CREATE_NO_WINDOW
+            .creation_flags(0x08000000)
+            .output();
+    }
+}
+
+/// Мягкая остановка sing-box: taskkill без /F → ждём 3с → force kill
+fn graceful_kill_pid(pid: u32) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        // Мягкий kill — отправляет WM_CLOSE, sing-box чистит WinTUN
+        let _ = std::process::Command::new("taskkill")
+            .args(["/PID", &pid.to_string()])
+            .creation_flags(0x08000000)
+            .output();
+
+        // Ждём завершения (до 3 секунд)
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(3) {
+            std::thread::sleep(Duration::from_millis(200));
+            // Проверяем: tasklist вернёт ошибку если PID не существует
+            let check = std::process::Command::new("tasklist")
+                .args(["/FI", &format!("PID eq {}", pid), "/NH"])
+                .creation_flags(0x08000000)
+                .output();
+            if let Ok(out) = check {
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                if !stdout.contains(&pid.to_string()) {
+                    return; // Процесс завершился
+                }
+            }
+        }
+
+        // Fallback: force kill
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/PID", &pid.to_string()])
+            .creation_flags(0x08000000)
             .output();
     }
 }
