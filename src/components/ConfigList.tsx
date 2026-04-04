@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useT } from "../i18n";
 
 export interface VlessConfig {
@@ -28,6 +29,7 @@ interface ConfigListProps {
 
 export function ConfigList({ configs, activeId, connected, onSelect, onRemove, onPaste }: ConfigListProps) {
   const t = useT();
+  const [confirmId, setConfirmId] = useState<string | null>(null);
   return (
     <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: "6px", overflow: "hidden" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "4px" }}>
@@ -67,6 +69,7 @@ export function ConfigList({ configs, activeId, connected, onSelect, onRemove, o
               <div
                 key={cfg.id}
                 onClick={() => !connected && onSelect(cfg.id)}
+                className="cfg-row"
                 style={{
                   display: "flex",
                   alignItems: "center",
@@ -78,8 +81,17 @@ export function ConfigList({ configs, activeId, connected, onSelect, onRemove, o
                   opacity: isDimmed ? 0.4 : 1,
                   transition: "background 0.1s, opacity 0.3s",
                 }}
-                onMouseEnter={(e) => { if (!connected && !isActive) e.currentTarget.style.background = "var(--color-surface)"; }}
-                onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.background = "transparent"; }}
+                onMouseEnter={(e) => {
+                  if (!connected && !isActive) e.currentTarget.style.background = "var(--color-surface)";
+                  const btn = e.currentTarget.querySelector<HTMLElement>(".remove-btn");
+                  if (btn && confirmId !== cfg.id) btn.style.opacity = "1";
+                }}
+                onMouseLeave={(e) => {
+                  if (!isActive) e.currentTarget.style.background = "transparent";
+                  const btn = e.currentTarget.querySelector<HTMLElement>(".remove-btn");
+                  if (btn && confirmId !== cfg.id) btn.style.opacity = "0";
+                  setConfirmId(null);
+                }}
               >
                 <div style={{
                   width: "5px", height: "5px", borderRadius: "50%", flexShrink: 0,
@@ -104,15 +116,24 @@ export function ConfigList({ configs, activeId, connected, onSelect, onRemove, o
                 </div>
                 {!connected && (
                   <div
-                    onClick={(e) => { e.stopPropagation(); onRemove(cfg.id); }}
+                    className="remove-btn"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (confirmId === cfg.id) {
+                        onRemove(cfg.id);
+                        setConfirmId(null);
+                      } else {
+                        setConfirmId(cfg.id);
+                      }
+                    }}
                     style={{
                       width: "18px", height: "18px", borderRadius: "4px",
                       display: "flex", alignItems: "center", justifyContent: "center",
-                      color: "var(--color-text-dim)", cursor: "pointer", opacity: 0,
+                      color: confirmId === cfg.id ? "var(--color-error-text)" : "var(--color-text-dim)",
+                      cursor: "pointer",
+                      opacity: confirmId === cfg.id ? 1 : 0,
                       transition: "opacity 0.1s, color 0.1s", fontSize: "12px",
                     }}
-                    onMouseEnter={(e) => { e.currentTarget.style.opacity = "1"; e.currentTarget.style.color = "var(--color-text-tertiary)"; e.currentTarget.style.background = "var(--color-text-ghost)"; }}
-                    onMouseLeave={(e) => { e.currentTarget.style.opacity = "0"; e.currentTarget.style.background = "transparent"; }}
                   >
                     ×
                   </div>

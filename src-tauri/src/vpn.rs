@@ -26,6 +26,12 @@ pub struct VlessParams {
     pub flow: String,
     #[allow(dead_code)]
     pub name: String,
+    // Transport
+    pub transport_type: String, // "", "tcp", "ws", "http", "grpc", "quic", "httpupgrade"
+    pub transport_path: String,
+    pub transport_host: String,
+    pub service_name: String,
+    pub alpn: Vec<String>,
 }
 
 fn percent_decode(s: &str) -> String {
@@ -78,6 +84,9 @@ const ALLOWED_SECURITY: &[&str] = &["reality", "tls", "none", ""];
 
 /// Допустимые значения параметра flow (после нормализации)
 const ALLOWED_FLOW: &[&str] = &["", "xtls-rprx-vision"];
+
+/// Допустимые значения параметра type (транспорт)
+const ALLOWED_TRANSPORT: &[&str] = &["", "tcp", "ws", "http", "grpc", "quic", "httpupgrade"];
 
 pub fn parse_vless_uri(uri: &str) -> Result<VlessParams, String> {
     let uri = uri.trim();
@@ -158,6 +167,32 @@ pub fn parse_vless_uri(uri: &str) -> Result<VlessParams, String> {
         ));
     }
 
+    // Transport
+    let transport_type = params.get("type").unwrap_or(&"").to_lowercase();
+    if transport_type == "xhttp" || transport_type == "splithttp" {
+        return Err("транспорт xhttp/splithttp не поддерживается sing-box (только Xray)".into());
+    }
+    if !ALLOWED_TRANSPORT.contains(&transport_type.as_str()) {
+        return Err(format!(
+            "неподдерживаемый транспорт: '{}' (допустимо: tcp, ws, http, grpc, quic, httpupgrade)",
+            transport_type
+        ));
+    }
+
+    // flow работает только с TCP (без транспорта)
+    let effective_flow = if !transport_type.is_empty() && transport_type != "tcp" {
+        String::new()
+    } else {
+        flow
+    };
+
+    let alpn_raw = percent_decode(params.get("alpn").unwrap_or(&""));
+    let alpn: Vec<String> = if alpn_raw.is_empty() {
+        Vec::new()
+    } else {
+        alpn_raw.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+    };
+
     Ok(VlessParams {
         uuid: uuid.to_string(),
         host: clean_host.to_string(),
@@ -167,8 +202,13 @@ pub fn parse_vless_uri(uri: &str) -> Result<VlessParams, String> {
         fingerprint: params.get("fp").unwrap_or(&"chrome").to_string(),
         public_key: params.get("pbk").unwrap_or(&"").to_string(),
         short_id: params.get("sid").unwrap_or(&"").to_string(),
-        flow,
+        flow: effective_flow,
         name,
+        transport_type,
+        transport_path: percent_decode(params.get("path").unwrap_or(&"")),
+        transport_host: percent_decode(params.get("host").unwrap_or(&"")),
+        service_name: percent_decode(params.get("serviceName").unwrap_or(&"")),
+        alpn,
     })
 }
 
@@ -331,11 +371,17 @@ pub fn generate_singbox_config(
                 "short_id": p.short_id
             }
         }),
-        "tls" => serde_json::json!({
-            "enabled": true,
-            "server_name": p.sni,
-            "utls": { "enabled": !p.fingerprint.is_empty(), "fingerprint": p.fingerprint }
-        }),
+        "tls" => {
+            let mut tls_obj = serde_json::json!({
+                "enabled": true,
+                "server_name": p.sni,
+                "utls": { "enabled": !p.fingerprint.is_empty(), "fingerprint": p.fingerprint }
+            });
+            if !p.alpn.is_empty() {
+                tls_obj["alpn"] = serde_json::json!(p.alpn);
+            }
+            tls_obj
+        },
         _ => serde_json::json!({ "enabled": false }),
     };
 
@@ -352,6 +398,54 @@ pub fn generate_singbox_config(
     }
     outbound["packet_encoding"] = serde_json::Value::String("xudp".into());
 
+    // Transport
+    let transport = match p.transport_type.as_str() {
+        "ws" => {
+            let mut t = serde_json::json!({ "type": "ws" });
+            if !p.transport_path.is_empty() {
+                t["path"] = serde_json::Value::String(p.transport_path.clone());
+            }
+            if !p.transport_host.is_empty() {
+                t["headers"] = serde_json::json!({ "Host": p.transport_host });
+            }
+            Some(t)
+        }
+        "http" => {
+            let mut t = serde_json::json!({ "type": "http" });
+            if !p.transport_path.is_empty() {
+                t["path"] = serde_json::Value::String(p.transport_path.clone());
+            }
+            if !p.transport_host.is_empty() {
+                let hosts: Vec<&str> = p.transport_host.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+                t["host"] = serde_json::json!(hosts);
+            }
+            Some(t)
+        }
+        "grpc" => {
+            let mut t = serde_json::json!({ "type": "grpc" });
+            if !p.service_name.is_empty() {
+                t["service_name"] = serde_json::Value::String(p.service_name.clone());
+            }
+            Some(t)
+        }
+        "quic" => Some(serde_json::json!({ "type": "quic" })),
+        "httpupgrade" => {
+            let mut t = serde_json::json!({ "type": "httpupgrade" });
+            if !p.transport_path.is_empty() {
+                t["path"] = serde_json::Value::String(p.transport_path.clone());
+            }
+            if !p.transport_host.is_empty() {
+                t["host"] = serde_json::Value::String(p.transport_host.clone());
+            }
+            Some(t)
+        }
+        "tcp" | "" => None, // raw TCP — no transport section
+        _ => None,
+    };
+    if let Some(t) = transport {
+        outbound["transport"] = t;
+    }
+
     let inbound = match mode {
         VpnMode::Proxy => serde_json::json!([{
             "type": "mixed",
@@ -359,20 +453,26 @@ pub fn generate_singbox_config(
             "listen": "127.0.0.1",
             "listen_port": 2080
         }]),
-        VpnMode::Tun => serde_json::json!([{
-            "type": "tun",
-            "tag": "tun-in",
-            "address": ["172.18.0.1/30", "fdfe:dcba:9876::1/126"],
-            "mtu": 1500,
-            "auto_route": true,
-            "strict_route": false,
-            "stack": "gvisor",
-            "route_exclude_address": [
-                format!("{}/32", p.host),
-                "1.1.1.1/32",
-                "2000::/3"
-            ]
-        }]),
+        VpnMode::Tun => {
+            // IPv4 → /32, IPv6 → /128, домен → пропускаем
+            let mut exclude = vec!["1.1.1.1/32".to_string(), "2000::/3".to_string()];
+            if let Ok(ip) = p.host.parse::<IpAddr>() {
+                match ip {
+                    IpAddr::V4(_) => exclude.insert(0, format!("{}/32", p.host)),
+                    IpAddr::V6(_) => exclude.insert(0, format!("{}/128", p.host)),
+                }
+            }
+            serde_json::json!([{
+                "type": "tun",
+                "tag": "tun-in",
+                "address": ["172.18.0.1/30", "fdfe:dcba:9876::1/126"],
+                "mtu": 1500,
+                "auto_route": true,
+                "strict_route": false,
+                "stack": "gvisor",
+                "route_exclude_address": exclude
+            }])
+        },
     };
 
     let config = serde_json::json!({
