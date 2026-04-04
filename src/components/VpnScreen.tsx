@@ -66,6 +66,12 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
   const manualDisconnect = useRef(false);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttempt = useRef(0);
+  const configsRef = useRef(configs);
+  const activeIdRef = useRef(activeId);
+  const vpnModeRef = useRef(vpnMode);
+  configsRef.current = configs;
+  activeIdRef.current = activeId;
+  vpnModeRef.current = vpnMode;
   const MAX_RECONNECT_ATTEMPTS = 10;
 
   // Load store
@@ -91,6 +97,9 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
       setActiveId(savedActiveId);
       setVpnMode(savedMode);
       setStoreReady(true);
+    }).catch((err) => {
+      console.error("Failed to load store:", err);
+      setStoreReady(true); // Allow app to function with empty configs
     });
   }, []);
 
@@ -160,14 +169,14 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
           reconnectTimer.current = setTimeout(() => {
             setReconnecting(false);
             const doReconnect = async () => {
-              const cfg = configs.find((c) => c.id === activeId);
+              const cfg = configsRef.current.find((c) => c.id === activeIdRef.current);
               if (!cfg) return;
               const store = storeRef.current ?? await loadStore(STORE_FILE, { autoSave: false, defaults: {} });
               const bypassVpn = (await store.get<string[]>("routes_bypass")) ?? [];
               const bypassApps = (await store.get<string[]>("routes_bypass_apps")) ?? [];
               try {
                 setLogLines((prev) => [...prev, "[auto-reconnect] connecting..."]);
-                await invoke("start_vpn", { uri: cfg.uri, bypassVpn, bypassApps, mode: vpnMode });
+                await invoke("start_vpn", { uri: cfg.uri, bypassVpn, bypassApps, mode: vpnModeRef.current });
                 setConnected(true);
                 setConnectTime(Date.now());
                 reconnectAttempt.current = 0; // Reset on success

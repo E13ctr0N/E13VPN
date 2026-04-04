@@ -160,7 +160,7 @@ pub fn parse_vless_uri(uri: &str) -> Result<VlessParams, String> {
 
     Ok(VlessParams {
         uuid: uuid.to_string(),
-        host: host.to_string(),
+        host: clean_host.to_string(),
         port,
         security,
         sni: params.get("sni").unwrap_or(&"").to_string(),

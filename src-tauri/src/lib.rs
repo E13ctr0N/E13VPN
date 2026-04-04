@@ -438,7 +438,10 @@ fn dpapi_protect(data: &[u8]) -> Result<Vec<u8>, String> {
         return Err("DPAPI CryptProtectData failed".into());
     }
     let result = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
-    unsafe { LocalFree(output.pbData as *mut _) };
+    unsafe {
+        std::ptr::write_bytes(output.pbData, 0, output.cbData as usize);
+        LocalFree(output.pbData as *mut _);
+    };
     Ok(result)
 }
 
@@ -459,7 +462,10 @@ fn dpapi_unprotect(data: &[u8]) -> Result<Vec<u8>, String> {
         return Err("DPAPI CryptUnprotectData failed".into());
     }
     let result = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
-    unsafe { LocalFree(output.pbData as *mut _) };
+    unsafe {
+        std::ptr::write_bytes(output.pbData, 0, output.cbData as usize);
+        LocalFree(output.pbData as *mut _);
+    };
     Ok(result)
 }
 
