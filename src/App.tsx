@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { Titlebar } from "./components/Titlebar";
-import { MainScreen } from "./components/MainScreen";
+import { VpnScreen } from "./components/VpnScreen";
 import { RoutesScreen } from "./components/RoutesScreen";
-
-type Tab = "configs" | "routes";
+import { LogsScreen } from "./components/LogsScreen";
+import { BottomNav, Tab } from "./components/BottomNav";
 
 function App() {
-  const [tab, setTab] = useState<Tab>("configs");
+  const [tab, setTab] = useState<Tab>("vpn");
+  const [connected, setConnected] = useState(false);
+  const [logLines, setLogLines] = useState<string[]>([]);
 
   return (
     <div
@@ -16,72 +18,31 @@ function App() {
         display: "flex",
         flexDirection: "column",
         background: "var(--color-bg)",
-        border: "1px solid var(--color-border)",
+        border: connected ? "1px solid var(--color-border-active)" : "1px solid var(--color-border)",
         borderRadius: "var(--radius-lg)",
         overflow: "hidden",
+        transition: "border-color 0.3s",
       }}
     >
-      <Titlebar />
-      <TabBar active={tab} onChange={setTab} />
-      <div style={{ flex: 1, display: tab === "configs" ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}>
-        <MainScreen />
+      <Titlebar connected={connected} />
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
+        <div style={{ flex: 1, display: tab === "vpn" ? "flex" : "none", overflow: "hidden" }}>
+          <VpnScreen
+            connected={connected}
+            setConnected={setConnected}
+            logLines={logLines}
+            setLogLines={setLogLines}
+          />
+        </div>
+        <div style={{ flex: 1, display: tab === "routes" ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}>
+          <RoutesScreen />
+        </div>
+        <div style={{ flex: 1, display: tab === "logs" ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}>
+          <LogsScreen logLines={logLines} />
+        </div>
       </div>
-      <div style={{ flex: 1, display: tab === "routes" ? "flex" : "none", flexDirection: "column", overflow: "hidden" }}>
-        <RoutesScreen />
-      </div>
+      <BottomNav active={tab} onChange={setTab} />
     </div>
-  );
-}
-
-function TabBar({ active, onChange }: { active: Tab; onChange: (t: Tab) => void }) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        borderBottom: "1px solid var(--color-border)",
-        background: "var(--color-surface)",
-        flexShrink: 0,
-      }}
-    >
-      <TabBtn active={active === "configs"} onClick={() => onChange("configs")}>
-        Конфиги
-      </TabBtn>
-      <TabBtn active={active === "routes"} onClick={() => onChange("routes")}>
-        Маршруты
-      </TabBtn>
-    </div>
-  );
-}
-
-function TabBtn({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      style={{
-        flex: 1,
-        height: "28px",
-        border: "none",
-        borderBottom: `2px solid ${active ? "var(--color-accent)" : "transparent"}`,
-        background: "transparent",
-        color: active ? "var(--color-accent)" : "var(--color-text-muted)",
-        cursor: "pointer",
-        fontSize: "10px",
-        letterSpacing: "0.1em",
-        textTransform: "uppercase",
-        fontFamily: "var(--font-mono)",
-        transition: "color 0.15s, border-color 0.15s",
-      }}
-    >
-      {children}
-    </button>
   );
 }
 

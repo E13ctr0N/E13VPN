@@ -14,15 +14,15 @@
       {
         "label": "main",
         "title": "E13VPN",
-        "width": 360,
-        "height": 560,
+        "width": 480,
+        "height": 300,
         "resizable": false,
         "decorations": false,
         "center": true
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:9090; style-src 'self' 'unsafe-inline'; font-src 'self' https://fonts.gstatic.com; style-src-elem 'self' 'unsafe-inline' https://fonts.googleapis.com"
+      "csp": "default-src 'self'; connect-src 'self' http://127.0.0.1:9090; style-src 'self' 'unsafe-inline'"
     }
   },
   "bundle": {
