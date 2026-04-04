@@ -54,14 +54,14 @@ export function RoutesScreen() {
       <div style={{ flex: 1, display: "flex", overflow: "hidden" }}>
         <RouteColumn
           title="Мимо VPN (сайты)"
-          accent="var(--color-success)"
+          accent="var(--color-text-muted)"
           entries={bypass}
           onRemove={(i) => setBypass((prev) => prev.filter((_, idx) => idx !== i))}
         />
         <div style={{ width: "1px", background: "var(--color-border)", flexShrink: 0 }} />
         <RouteColumn
           title="Мимо VPN (приложения)"
-          accent="var(--color-accent)"
+          accent="var(--color-text-muted)"
           entries={bypassApps}
           onRemove={(i) => setBypassApps((prev) => prev.filter((_, idx) => idx !== i))}
         />
@@ -86,7 +86,7 @@ export function RoutesScreen() {
           onChange={setInputSites}
           onAdd={addSite}
           placeholder="домен или IP/CIDR"
-          color="var(--color-success)"
+          color="var(--color-text-muted)"
         />
         {/* Apps input */}
         <InputRow
@@ -95,7 +95,7 @@ export function RoutesScreen() {
           onChange={setInputApps}
           onAdd={addApp}
           placeholder="chrome.exe"
-          color="var(--color-accent)"
+          color="var(--color-text-muted)"
         />
       </div>
     </div>
@@ -128,11 +128,11 @@ function InputRow({
         style={{
           flex: 1,
           height: "30px",
-          background: "var(--color-surface-2)",
+          background: "var(--color-surface-hover)",
           border: "1px solid var(--color-border)",
           borderRadius: "var(--radius-sm)",
           color: "var(--color-text)",
-          fontFamily: "var(--font-mono)",
+          fontFamily: "var(--font-system)",
           fontSize: "11px",
           padding: "0 8px",
           outline: "none",
@@ -148,10 +148,10 @@ function InputRow({
           height: "30px",
           border: "none",
           borderRadius: "var(--radius-sm)",
-          background: color,
-          color: "#0d0d0d",
+          background: "var(--color-text-muted)",
+          color: "#111",
           cursor: "pointer",
-          fontFamily: "var(--font-mono)",
+          fontFamily: "var(--font-system)",
           fontSize: "16px",
           fontWeight: 600,
           display: "flex",
@@ -230,7 +230,7 @@ function RouteEntry({ value, onRemove }: { value: string; onRemove: () => void }
         gap: "4px",
       }}
       onMouseEnter={(e) =>
-        ((e.currentTarget as HTMLDivElement).style.background = "var(--color-surface-2)")
+        ((e.currentTarget as HTMLDivElement).style.background = "var(--color-surface-hover)")
       }
       onMouseLeave={(e) =>
         ((e.currentTarget as HTMLDivElement).style.background = "transparent")
@@ -265,7 +265,7 @@ function RouteEntry({ value, onRemove }: { value: string; onRemove: () => void }
           borderRadius: "2px",
           transition: "color 0.1s",
         }}
-        onMouseEnter={(e) => (e.currentTarget.style.color = "var(--color-danger)")}
+        onMouseEnter={(e) => (e.currentTarget.style.color = "var(--color-text-tertiary)")}
         onMouseLeave={(e) => (e.currentTarget.style.color = "var(--color-text-muted)")}
       >
         <svg width="7" height="7" viewBox="0 0 7 7" fill="none">
