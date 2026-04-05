@@ -13,6 +13,7 @@ const translations = {
   "vpn.disconnected": { ru: "Отключено", en: "Disconnected" },
   "vpn.connected": { ru: "Подключено", en: "Connected" },
   "vpn.connecting": { ru: "Подключение...", en: "Connecting..." },
+  "vpn.disconnecting": { ru: "Отключение...", en: "Disconnecting..." },
   "vpn.reconnecting": { ru: "Переподключение...", en: "Reconnecting..." },
   "vpn.servers": { ru: "Серверы", en: "Servers" },
   "vpn.paste": { ru: "+ Вставить", en: "+ Paste" },

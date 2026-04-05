@@ -55,7 +55,7 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
   const t = useT();
   const [configs, setConfigs] = useState<VlessConfig[]>([]);
   const [activeId, setActiveId] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState<false | "connecting" | "disconnecting">(false);
   const [storeReady, setStoreReady] = useState(false);
   const [vpnMode, setVpnMode] = useState<"proxy" | "tun">("proxy");
   const [speed, setSpeed] = useState<{ down: number; up: number } | null>(null);
@@ -240,11 +240,28 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
   }
 
   async function toggleConnect() {
-    if (!activeId || busy) return;
+    if (!activeId) return;
+
+    // Если идёт подключение — отменяем (stop_vpn убьёт процесс)
+    if (busy === "connecting") {
+      manualDisconnect.current = true;
+      setBusy("disconnecting");
+      try {
+        await invoke("stop_vpn");
+      } catch {}
+      setConnected(false);
+      setConnectTime(null);
+      invoke("update_tray_icon", { connected: false }).catch(() => {});
+      setBusy(false);
+      return;
+    }
+
+    if (busy) return; // disconnecting — не прерываем
+
     const cfg = configs.find((c) => c.id === activeId)!;
-    setBusy(true);
     try {
       if (!connected) {
+        setBusy("connecting");
         setLogLines([]);
         const store = storeRef.current ?? await loadStore(STORE_FILE, { autoSave: false, defaults: {} });
         const bypassVpn = (await store.get<string[]>("routes_bypass")) ?? [];
@@ -254,6 +271,7 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
         setConnectTime(Date.now());
         invoke("update_tray_icon", { connected: true }).catch(() => {});
       } else {
+        setBusy("disconnecting");
         manualDisconnect.current = true;
         if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
         setReconnecting(false);
@@ -270,7 +288,15 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
   }
 
   const powerState = busy || reconnecting ? "connecting" : connected ? "on" : "off";
-  const statusText = reconnecting ? t("vpn.reconnecting") : busy ? t("vpn.connecting") : connected ? t("vpn.connected") : t("vpn.disconnected");
+  const statusText = reconnecting
+    ? t("vpn.reconnecting")
+    : busy === "disconnecting"
+    ? t("vpn.disconnecting")
+    : busy === "connecting"
+    ? t("vpn.connecting")
+    : connected
+    ? t("vpn.connected")
+    : t("vpn.disconnected");
   const statusColor = busy || reconnecting
     ? "var(--color-text-tertiary)"
     : connected
@@ -291,7 +317,7 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
           padding: "16px",
         }}
       >
-        <PowerButton state={powerState} onClick={toggleConnect} disabled={!activeId || busy} />
+        <PowerButton state={powerState} onClick={toggleConnect} disabled={!activeId || busy === "disconnecting"} />
         <span style={{ fontSize: "11px", fontWeight: 500, color: statusColor, transition: "color 0.3s" }}>
           {statusText}
         </span>
