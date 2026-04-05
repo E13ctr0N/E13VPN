@@ -231,38 +231,108 @@ fn check_rate_limit(state: &VpnState) -> Result<(), String> {
     Ok(())
 }
 
-/// Ждём готовности порта sing-box (TCP connect check)
-fn wait_for_port(port: u16, timeout_ms: u64) -> bool {
-    use std::net::TcpStream;
-    use std::time::{Duration, Instant};
-
-    let addr = format!("127.0.0.1:{}", port);
-    let start = Instant::now();
-    let timeout = Duration::from_millis(timeout_ms);
-
-    while start.elapsed() < timeout {
-        if TcpStream::connect_timeout(
-            &addr.parse().unwrap(),
-            Duration::from_millis(100),
-        )
-        .is_ok()
-        {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    false
-}
-
-/// Очистка VPN-состояния: убить процесс, сбросить прокси
+/// Очистка VPN-состояния: мягкая остановка процесса, сбросить прокси
 fn cleanup_vpn(state: &VpnState) {
+    let pid = state.pid.lock().unwrap_or_else(|e| e.into_inner()).take();
     let mut guard = state.process.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(child) = guard.take() {
-        let _ = child.kill();
+    let _ = guard.take(); // drop CommandChild
+
+    if let Some(pid) = pid {
+        graceful_kill_pid(pid);
     }
+
     let mode = state.mode.lock().unwrap_or_else(|e| e.into_inner()).clone();
     if mode == vpn::VpnMode::Proxy {
         let _ = vpn::set_system_proxy(false);
+    }
+}
+
+/// Одна попытка запуска sing-box. Возвращает Ok если sing-box стартовал и готов.
+async fn attempt_start_singbox(
+    app: &AppHandle,
+    state: &State<'_, VpnState>,
+    config_str: &str,
+    data_dir: &std::path::Path,
+    vpn_mode: &vpn::VpnMode,
+) -> Result<(), String> {
+    let mut cmd = app
+        .shell()
+        .sidecar("sing-box")
+        .map_err(|e| e.to_string())?
+        .args(["run", "-c", config_str]);
+
+    if *vpn_mode == vpn::VpnMode::Tun {
+        cmd = cmd.current_dir(data_dir);
+    }
+
+    let (mut receiver, child) = cmd.spawn().map_err(|e| e.to_string())?;
+
+    let child_pid = child.pid();
+    *state.process.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
+    *state.pid.lock().unwrap_or_else(|e| e.into_inner()) = Some(child_pid);
+    *state.mode.lock().unwrap_or_else(|e| e.into_inner()) = vpn_mode.clone();
+
+    let app_clone = app.clone();
+    let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
+    let ready_tx = std::sync::Arc::new(tokio::sync::Mutex::new(Some(ready_tx)));
+
+    tauri::async_runtime::spawn(async move {
+        use tauri_plugin_shell::process::CommandEvent;
+        while let Some(event) = receiver.recv().await {
+            match event {
+                CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes) => {
+                    let line = String::from_utf8_lossy(&bytes).trim().to_string();
+                    if !line.is_empty() {
+                        // Обнаружение готовности: "sing-box started" в логе
+                        if line.contains("sing-box started") {
+                            if let Some(tx) = ready_tx.lock().await.take() {
+                                let _ = tx.send(());
+                            }
+                        }
+                        let _ = app_clone.emit("singbox-log", line);
+                    }
+                }
+                CommandEvent::Terminated(status) => {
+                    drop(ready_tx);
+                    if let Some(st) = app_clone.try_state::<VpnState>() {
+                        let mode = st.mode.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                        if mode == vpn::VpnMode::Proxy {
+                            let _ = vpn::set_system_proxy(false);
+                        }
+                        let _ = st.process.lock().unwrap_or_else(|e| e.into_inner()).take();
+                        let _ = st.pid.lock().unwrap_or_else(|e| e.into_inner()).take();
+                    }
+                    let msg = format!(
+                        "sing-box завершился (код: {})",
+                        status.code.map(|c| c.to_string()).unwrap_or("?".into())
+                    );
+                    let _ = app_clone.emit("singbox-terminated", msg);
+                    break;
+                }
+                _ => {}
+            }
+        }
+    });
+
+    // Ждём готовности sing-box (макс. 5 секунд)
+    let ready = tokio::time::timeout(Duration::from_secs(5), ready_rx).await;
+    match ready {
+        Ok(Ok(())) => {
+            if *vpn_mode == vpn::VpnMode::Proxy {
+                vpn::set_system_proxy(true)?;
+            }
+            Ok(())
+        }
+        _ => {
+            // Таймаут или sing-box упал до готовности
+            let pid = state.pid.lock().unwrap_or_else(|e| e.into_inner()).take();
+            let mut guard = state.process.lock().unwrap_or_else(|e| e.into_inner());
+            let _ = guard.take();
+            if let Some(pid) = pid {
+                graceful_kill_pid(pid);
+            }
+            Err("sing-box не запустился за 5 секунд".into())
+        }
     }
 }
 
@@ -278,6 +348,18 @@ async fn start_vpn(
     check_rate_limit(&state)?;
 
     let vpn_mode = vpn::VpnMode::from_str(&mode);
+
+    // TUN cooldown: ждём минимум 2с после предыдущего TUN stop
+    if vpn_mode == vpn::VpnMode::Tun {
+        let last_stop = *state.last_tun_stop.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(stop_time) = last_stop {
+            let elapsed = stop_time.elapsed();
+            if elapsed < Duration::from_secs(2) {
+                let remaining = Duration::from_secs(2) - elapsed;
+                tokio::time::sleep(remaining).await;
+            }
+        }
+    }
 
     if vpn_mode == vpn::VpnMode::Tun && !is_elevated() {
         return Err("TUN-режим требует запуска от администратора".into());
@@ -300,14 +382,9 @@ async fn start_vpn(
     std::fs::write(&config_path, &config_json).map_err(|e| e.to_string())?;
 
     // Копируем wintun.dll в app_data_dir для TUN режима
-    // sing-box ищет wintun.dll в CWD, а мы устанавливаем CWD = data_dir
     if vpn_mode == vpn::VpnMode::Tun {
         let wintun_dst = data_dir.join("wintun.dll");
         if !wintun_dst.exists() {
-            // Ищем wintun.dll в нескольких местах:
-            // 1) resource_dir (tauri resources)
-            // 2) resource_dir/binaries (dev mode layout)
-            // 3) рядом с exe приложения
             let candidates = {
                 let mut c = Vec::new();
                 if let Ok(res) = app.path().resource_dir() {
@@ -331,11 +408,13 @@ async fn start_vpn(
         }
     }
 
-    // Убиваем предыдущий процесс (из текущей сессии)
+    // Убиваем предыдущий процесс (из текущей сессии) — graceful
     {
+        let pid = state.pid.lock().unwrap_or_else(|e| e.into_inner()).take();
         let mut guard = state.process.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(child) = guard.take() {
-            let _ = child.kill();
+        let _ = guard.take();
+        if let Some(pid) = pid {
+            graceful_kill_pid(pid);
         }
     }
 
@@ -350,7 +429,6 @@ async fn start_vpn(
             .map_err(|e| e.to_string())?
             .join("binaries")
             .join("sing-box-x86_64-pc-windows-msvc.exe");
-        // Проверяем оба возможных пути: resource/binaries и рядом с exe
         let paths_to_check = {
             let mut v = vec![sidecar_path];
             if let Ok(exe) = std::env::current_exe() {
@@ -370,76 +448,34 @@ async fn start_vpn(
         .ok_or("неверный путь к конфигу")?
         .to_string();
 
-    let mut cmd = app
-        .shell()
-        .sidecar("sing-box")
-        .map_err(|e| e.to_string())?
-        .args(["run", "-c", &config_str]);
+    // TUN: до 3 попыток с паузой 2с. Proxy: 1 попытка.
+    let max_attempts = if vpn_mode == vpn::VpnMode::Tun { 3 } else { 1 };
+    let mut last_err = String::new();
 
-    // В TUN режиме sing-box должен найти wintun.dll рядом с собой
-    if vpn_mode == vpn::VpnMode::Tun {
-        cmd = cmd.current_dir(&data_dir);
-    }
+    for attempt in 1..=max_attempts {
+        if attempt > 1 {
+            let _ = app.emit("singbox-log", format!("[tun-retry] попытка {}/{}...", attempt, max_attempts));
+            tokio::time::sleep(Duration::from_secs(2)).await;
+            kill_orphan_singbox();
+        }
 
-    let (mut receiver, child) = cmd.spawn().map_err(|e| e.to_string())?;
-
-    *state.process.lock().unwrap_or_else(|e| e.into_inner()) = Some(child);
-    *state.mode.lock().unwrap_or_else(|e| e.into_inner()) = vpn_mode.clone();
-
-    let app_clone = app.clone();
-    tauri::async_runtime::spawn(async move {
-        use tauri_plugin_shell::process::CommandEvent;
-        while let Some(event) = receiver.recv().await {
-            match event {
-                CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes) => {
-                    let line = String::from_utf8_lossy(&bytes).trim().to_string();
-                    if !line.is_empty() {
-                        let _ = app_clone.emit("singbox-log", line);
-                    }
+        match attempt_start_singbox(&app, &state, &config_str, &data_dir, &vpn_mode).await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                last_err = e;
+                if attempt < max_attempts {
+                    let _ = app.emit("singbox-log", format!("[tun-retry] ошибка: {}", last_err));
                 }
-                CommandEvent::Terminated(status) => {
-                    // Автоочистка: сброс прокси при неожиданном завершении
-                    if let Some(st) = app_clone.try_state::<VpnState>() {
-                        let mode = st.mode.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                        if mode == vpn::VpnMode::Proxy {
-                            let _ = vpn::set_system_proxy(false);
-                        }
-                        let _ = st.process.lock().unwrap_or_else(|e| e.into_inner()).take();
-                    }
-                    let msg = format!(
-                        "sing-box завершился (код: {})",
-                        status.code.map(|c| c.to_string()).unwrap_or("?".into())
-                    );
-                    let _ = app_clone.emit("singbox-terminated", msg);
-                    break;
-                }
-                _ => {}
             }
         }
-    });
-
-    // В proxy-режиме ждём готовности порта перед включением прокси (не блокируя async runtime)
-    if vpn_mode == vpn::VpnMode::Proxy {
-        let port_ready = tauri::async_runtime::spawn_blocking(|| wait_for_port(2080, 5000))
-            .await
-            .unwrap_or(false);
-        if !port_ready {
-            // sing-box не поднял порт за 5 секунд — откатываемся
-            let mut guard = state.process.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(child) = guard.take() {
-                let _ = child.kill();
-            }
-            return Err("sing-box не запустился: порт 2080 недоступен".into());
-        }
-        vpn::set_system_proxy(true)?;
     }
 
-    Ok(())
+    Err(last_err)
 }
 
 #[tauri::command]
 async fn update_tray_icon(app: AppHandle, connected: bool) -> Result<(), String> {
-    let icon_name = if connected { "icons/Tact.png" } else { "icons/Tdis.png" };
+    let icon_name = if connected { "icons/1act.png" } else { "icons/2dis.png" };
     let icon_path = app
         .path()
         .resource_dir()
@@ -455,14 +491,28 @@ async fn update_tray_icon(app: AppHandle, connected: bool) -> Result<(), String>
 #[tauri::command]
 async fn stop_vpn(state: State<'_, VpnState>) -> Result<(), String> {
     check_rate_limit(&state)?;
-    let mut guard = state.process.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(child) = guard.take() {
-        child.kill().map_err(|e| e.to_string())?;
+
+    let (pid, had_process, mode) = {
+        let pid = state.pid.lock().unwrap_or_else(|e| e.into_inner()).take();
+        let mut guard = state.process.lock().unwrap_or_else(|e| e.into_inner());
+        let had_process = guard.take().is_some();
+        let mode = state.mode.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        (pid, had_process, mode)
+    };
+
+    if let Some(pid) = pid {
+        let _ = tauri::async_runtime::spawn_blocking(move || graceful_kill_pid(pid)).await;
     }
-    let mode = state.mode.lock().unwrap_or_else(|e| e.into_inner()).clone();
+
     if mode == vpn::VpnMode::Proxy {
         vpn::set_system_proxy(false)?;
     }
+
+    // Записываем время остановки TUN для cooldown
+    if mode == vpn::VpnMode::Tun && had_process {
+        *state.last_tun_stop.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+    }
+
     Ok(())
 }
 
@@ -621,7 +671,7 @@ pub fn run() {
                 .path()
                 .resource_dir()
                 .map_err(|e| e.to_string())?
-                .join("icons/Tdis.png");
+                .join("icons/2dis.png");
             let tray_icon = Image::from_path(&tray_icon_path)
                 .map_err(|e| e.to_string())?;
 
