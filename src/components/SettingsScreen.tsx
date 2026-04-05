@@ -32,7 +32,7 @@ export function SettingsScreen({
     <div
       style={{
         flex: 1,
-        overflowY: "auto",
+        overflow: "hidden",
         padding: "14px",
         display: "flex",
         flexDirection: "column",

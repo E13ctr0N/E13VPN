@@ -18,7 +18,7 @@ const translations = {
   "vpn.paste": { ru: "+ Вставить", en: "+ Paste" },
   "vpn.paste_hint": { ru: "вставьте vless:// конфиг", en: "paste vless:// config" },
   "vpn.mode_proxy": { ru: "Прокси", en: "Proxy" },
-  "vpn.mode_tun": { ru: "TUN", en: "TUN" },
+  "vpn.mode_tun": { ru: "Туннель", en: "Tunnel" },
 
   // RoutesScreen
   "routes.sites": { ru: "Мимо VPN (сайты)", en: "Bypass VPN (sites)" },
