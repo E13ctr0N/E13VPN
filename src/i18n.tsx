@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, ReactNode } from "react";
+import { createContext, useContext, useCallback, ReactNode } from "react";
 
 export type Lang = "ru" | "en";
 

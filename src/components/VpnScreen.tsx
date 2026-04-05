@@ -331,7 +331,7 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
           {elapsed}
         </span>
         <SpeedDisplay speed={speed} active={connected} />
-        <ModeSelector mode={vpnMode} onChange={setVpnMode} disabled={connected || busy} />
+        <ModeSelector mode={vpnMode} onChange={setVpnMode} disabled={connected || !!busy} />
       </div>
 
       {/* Divider */}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { load as loadStore, Store } from "@tauri-apps/plugin-store";
 import { Titlebar } from "./components/Titlebar";
@@ -82,11 +82,9 @@ function App() {
     if (!ready) return;
     const zoom = uiScale / 100;
     document.documentElement.style.zoom = String(zoom);
-    getCurrentWindow().setSize({
-      type: "Logical",
-      width: Math.round(BASE_W * zoom),
-      height: Math.round(BASE_H * zoom),
-    });
+    getCurrentWindow().setSize(
+      new LogicalSize(Math.round(BASE_W * zoom), Math.round(BASE_H * zoom))
+    );
   }, [uiScale, ready]);
 
   return (
