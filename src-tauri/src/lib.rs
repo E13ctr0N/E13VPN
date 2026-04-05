@@ -127,7 +127,7 @@ fn kill_orphan_singbox() {
             .args(["/IM", "sing-box-x86_64-pc-windows-msvc.exe"])
             .creation_flags(0x08000000)
             .output();
-        std::thread::sleep(Duration::from_secs(1));
+        std::thread::sleep(Duration::from_secs(2));
         // Потом force kill оставшихся
         let _ = std::process::Command::new("taskkill")
             .args(["/F", "/IM", "sing-box-x86_64-pc-windows-msvc.exe"])
@@ -151,14 +151,14 @@ fn graceful_kill_pid(pid: u32) {
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs(3) {
             std::thread::sleep(Duration::from_millis(200));
-            // Проверяем: tasklist вернёт ошибку если PID не существует
+            // Проверяем: tasklist с фильтром по PID — если в выводе н��т имени exe, процесс мёртв
             let check = std::process::Command::new("tasklist")
                 .args(["/FI", &format!("PID eq {}", pid), "/NH"])
                 .creation_flags(0x08000000)
                 .output();
             if let Ok(out) = check {
                 let stdout = String::from_utf8_lossy(&out.stdout);
-                if !stdout.contains(&pid.to_string()) {
+                if !stdout.contains("sing-box") {
                     return; // Процесс завершился
                 }
             }
@@ -276,6 +276,9 @@ async fn attempt_start_singbox(
     let (ready_tx, ready_rx) = tokio::sync::oneshot::channel::<()>();
     let ready_tx = std::sync::Arc::new(tokio::sync::Mutex::new(Some(ready_tx)));
 
+    // C3 fix: передаём PID в spawned task для ��равнения в terminated-handler
+    let expected_pid = child_pid;
+
     tauri::async_runtime::spawn(async move {
         use tauri_plugin_shell::process::CommandEvent;
         while let Some(event) = receiver.recv().await {
@@ -283,7 +286,6 @@ async fn attempt_start_singbox(
                 CommandEvent::Stdout(bytes) | CommandEvent::Stderr(bytes) => {
                     let line = String::from_utf8_lossy(&bytes).trim().to_string();
                     if !line.is_empty() {
-                        // Обнаружение готовности: "sing-box started" в логе
                         if line.contains("sing-box started") {
                             if let Some(tx) = ready_tx.lock().await.take() {
                                 let _ = tx.send(());
@@ -294,13 +296,17 @@ async fn attempt_start_singbox(
                 }
                 CommandEvent::Terminated(status) => {
                     drop(ready_tx);
+                    // Очищаем state только если PID совпадает (защита от race при retry)
                     if let Some(st) = app_clone.try_state::<VpnState>() {
-                        let mode = st.mode.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                        if mode == vpn::VpnMode::Proxy {
-                            let _ = vpn::set_system_proxy(false);
+                        let current_pid = *st.pid.lock().unwrap_or_else(|e| e.into_inner());
+                        if current_pid == Some(expected_pid) {
+                            let mode = st.mode.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                            if mode == vpn::VpnMode::Proxy {
+                                let _ = vpn::set_system_proxy(false);
+                            }
+                            let _ = st.process.lock().unwrap_or_else(|e| e.into_inner()).take();
+                            let _ = st.pid.lock().unwrap_or_else(|e| e.into_inner()).take();
                         }
-                        let _ = st.process.lock().unwrap_or_else(|e| e.into_inner()).take();
-                        let _ = st.pid.lock().unwrap_or_else(|e| e.into_inner()).take();
                     }
                     let msg = format!(
                         "sing-box завершился (код: {})",
@@ -325,11 +331,14 @@ async fn attempt_start_singbox(
         }
         _ => {
             // Таймаут или sing-box упал до готовности
-            let pid = state.pid.lock().unwrap_or_else(|e| e.into_inner()).take();
-            let mut guard = state.process.lock().unwrap_or_else(|e| e.into_inner());
-            let _ = guard.take();
-            if let Some(pid) = pid {
-                graceful_kill_pid(pid);
+            let failed_pid = {
+                let pid = state.pid.lock().unwrap_or_else(|e| e.into_inner()).take();
+                let mut guard = state.process.lock().unwrap_or_else(|e| e.into_inner());
+                let _ = guard.take();
+                pid
+            };
+            if let Some(pid) = failed_pid {
+                let _ = tauri::async_runtime::spawn_blocking(move || graceful_kill_pid(pid)).await;
             }
             Err("sing-box не запустился за 5 секунд".into())
         }
@@ -409,17 +418,18 @@ async fn start_vpn(
     }
 
     // Убиваем предыдущий процесс (из текущей сессии) — graceful
-    {
+    let prev_pid = {
         let pid = state.pid.lock().unwrap_or_else(|e| e.into_inner()).take();
         let mut guard = state.process.lock().unwrap_or_else(|e| e.into_inner());
         let _ = guard.take();
-        if let Some(pid) = pid {
-            graceful_kill_pid(pid);
-        }
+        pid
+    };
+    if let Some(pid) = prev_pid {
+        let _ = tauri::async_runtime::spawn_blocking(move || graceful_kill_pid(pid)).await;
     }
 
     // Убиваем осиротевшие процессы (из прошлых сессий)
-    kill_orphan_singbox();
+    let _ = tauri::async_runtime::spawn_blocking(kill_orphan_singbox).await;
 
     // SHA256 проверка sing-box перед запуском
     {
@@ -456,7 +466,7 @@ async fn start_vpn(
         if attempt > 1 {
             let _ = app.emit("singbox-log", format!("[tun-retry] попытка {}/{}...", attempt, max_attempts));
             tokio::time::sleep(Duration::from_secs(2)).await;
-            kill_orphan_singbox();
+            let _ = tauri::async_runtime::spawn_blocking(kill_orphan_singbox).await;
         }
 
         match attempt_start_singbox(&app, &state, &config_str, &data_dir, &vpn_mode).await {
