@@ -1,6 +1,6 @@
 [package]
 name = "e13vpn"
-version = "0.8.5"
+version = "0.8.9"
 description = "E13 App"
 authors = ["E13"]
 edition = "2021"
