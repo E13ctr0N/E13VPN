@@ -248,13 +248,13 @@ fn is_valid_domain(s: &str) -> bool {
 fn normalize_entry(s: &str) -> String {
     let s = s.trim();
     // Если пользователь вставил URL вида https://example.com/path — извлекаем хост
-    if let Some(rest) = s.strip_prefix("http://").or_else(|| s.strip_prefix("https://")) {
+    let s = if let Some(rest) = s.strip_prefix("http://").or_else(|| s.strip_prefix("https://")) {
         let host = rest.split('/').next().unwrap_or(rest);
         // Убираем порт если есть
-        let host = host.split(':').next().unwrap_or(host);
-        return host.to_lowercase();
-    }
-    let s = s.trim_end_matches('/').to_lowercase();
+        host.split(':').next().unwrap_or(host).to_lowercase()
+    } else {
+        s.trim_end_matches('/').to_lowercase()
+    };
     // *.ru → ru, .ru → ru — sing-box domain_suffix и так работает как суффикс-матч
     let s = s.strip_prefix("*.").or_else(|| s.strip_prefix('.')).unwrap_or(&s).to_string();
     s
@@ -502,15 +502,16 @@ pub fn generate_singbox_config(
         },
     };
 
+    let server_host = p.host.to_lowercase();
     let config = serde_json::json!({
         "log": { "level": "info", "timestamp": true },
-        "dns": build_dns(bypass, &p.host, mode),
+        "dns": build_dns(bypass, &server_host, mode),
         "inbounds": inbound,
         "outbounds": [
             outbound,
             { "type": "direct", "tag": "direct" }
         ],
-        "route": build_route(bypass, bypass_apps, &p.host, mode),
+        "route": build_route(bypass, bypass_apps, &server_host, mode),
         "experimental": {
             "clash_api": {
                 "external_controller": "127.0.0.1:9090"

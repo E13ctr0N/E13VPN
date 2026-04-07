@@ -20,8 +20,18 @@ export function RoutesScreen() {
   useEffect(() => {
     loadStore(STORE_FILE, { autoSave: false, defaults: {} }).then(async (store) => {
       storeRef.current = store;
-      setBypass((await store.get<string[]>("routes_bypass")) ?? []);
-      setBypassApps((await store.get<string[]>("routes_bypass_apps")) ?? []);
+      const rawBypass = (await store.get<string[]>("routes_bypass")) ?? [];
+      const rawApps = (await store.get<string[]>("routes_bypass_apps")) ?? [];
+      // Мигрируем старые записи: нормализация + дедупликация (.ru → ru)
+      const normalized: string[] = [];
+      for (const entry of rawBypass) {
+        try {
+          const [norm, valid] = await invoke<[string, boolean]>("validate_route", { entry });
+          if (valid && !normalized.includes(norm)) normalized.push(norm);
+        } catch { /* skip invalid */ }
+      }
+      setBypass(normalized);
+      setBypassApps(rawApps);
       setStoreReady(true);
     });
   }, []);
