@@ -557,6 +557,11 @@ fn update_tray_labels(app: AppHandle, show_label: String, quit_label: String) ->
 }
 
 #[tauri::command]
+fn validate_route(entry: String) -> (String, bool) {
+    vpn::validate_route_entry(&entry)
+}
+
+#[tauri::command]
 fn decrypt_string(value: String) -> Result<String, String> {
     #[cfg(windows)]
     { use base64::Engine; let data = base64::engine::general_purpose::STANDARD.decode(&value).map_err(|e| e.to_string())?; let decrypted = dpapi_unprotect(&data)?; String::from_utf8(decrypted).map_err(|e| e.to_string()) }
@@ -662,7 +667,7 @@ pub fn run() {
                 api.prevent_close();
             }
         })
-        .invoke_handler(tauri::generate_handler![start_vpn, stop_vpn, update_tray_icon, encrypt_string, decrypt_string, update_tray_labels])
+        .invoke_handler(tauri::generate_handler![start_vpn, stop_vpn, update_tray_icon, encrypt_string, decrypt_string, update_tray_labels, validate_route])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

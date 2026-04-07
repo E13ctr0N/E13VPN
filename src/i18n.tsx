@@ -27,6 +27,7 @@ const translations = {
   "routes.empty": { ru: "пусто", en: "empty" },
   "routes.site_placeholder": { ru: "домен или IP/CIDR", en: "domain or IP/CIDR" },
   "routes.app_placeholder": { ru: "chrome.exe", en: "chrome.exe" },
+  "routes.invalid_entry": { ru: "Неверный формат домена или IP", en: "Invalid domain or IP format" },
 
   // LogsScreen
   "logs.empty": { ru: "логов пока нет", en: "no logs yet" },

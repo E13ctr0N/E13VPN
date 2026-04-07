@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { load as loadStore, Store } from "@tauri-apps/plugin-store";
+import { invoke } from "@tauri-apps/api/core";
 import { useT } from "../i18n";
 
 const STORE_FILE = "vpn.json";
@@ -10,6 +11,7 @@ export function RoutesScreen() {
   const [bypassApps, setBypassApps] = useState<string[]>([]);
   const [inputSites, setInputSites] = useState("");
   const [inputApps, setInputApps] = useState("");
+  const [siteError, setSiteError] = useState("");
   const [storeReady, setStoreReady] = useState(false);
   const sitesRef = useRef<HTMLInputElement>(null);
   const appsRef = useRef<HTMLInputElement>(null);
@@ -34,11 +36,21 @@ export function RoutesScreen() {
     })();
   }, [bypass, bypassApps, storeReady]);
 
-  function addSite() {
-    const val = inputSites.trim().toLowerCase();
-    if (!val) return;
-    setBypass((prev) => (prev.includes(val) ? prev : [...prev, val]));
-    setInputSites("");
+  async function addSite() {
+    const raw = inputSites.trim();
+    if (!raw) return;
+    setSiteError("");
+    try {
+      const [norm, valid] = await invoke<[string, boolean]>("validate_route", { entry: raw });
+      if (!valid) {
+        setSiteError(t("routes.invalid_entry"));
+        return;
+      }
+      setBypass((prev) => (prev.includes(norm) ? prev : [...prev, norm]));
+      setInputSites("");
+    } catch {
+      setSiteError(t("routes.invalid_entry"));
+    }
     sitesRef.current?.focus();
   }
 
@@ -87,10 +99,11 @@ export function RoutesScreen() {
         <InputRow
           inputRef={sitesRef}
           value={inputSites}
-          onChange={setInputSites}
+          onChange={(v) => { setInputSites(v); setSiteError(""); }}
           onAdd={addSite}
           placeholder={t("routes.site_placeholder")}
           color="var(--color-text-muted)"
+          error={siteError}
         />
         {/* Apps input */}
         <InputRow
@@ -113,6 +126,7 @@ function InputRow({
   onAdd,
   placeholder,
   color,
+  error,
 }: {
   inputRef: React.RefObject<HTMLInputElement | null>;
   value: string;
@@ -120,55 +134,61 @@ function InputRow({
   onAdd: () => void;
   placeholder: string;
   color: string;
+  error?: string;
 }) {
   return (
-    <div style={{ display: "flex", gap: "6px" }}>
-      <input
-        ref={inputRef}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={(e) => e.key === "Enter" && onAdd()}
-        placeholder={placeholder}
-        style={{
-          flex: 1,
-          height: "30px",
-          background: "var(--color-surface-hover)",
-          border: "1px solid var(--color-border)",
-          borderRadius: "var(--radius-sm)",
-          color: "var(--color-text)",
-          fontFamily: "var(--font-system)",
-          fontSize: "11px",
-          padding: "0 8px",
-          outline: "none",
-          userSelect: "text",
-        }}
-        onFocus={(e) => (e.currentTarget.style.borderColor = color)}
-        onBlur={(e) => (e.currentTarget.style.borderColor = "var(--color-border)")}
-      />
-      <button
-        onClick={onAdd}
-        style={{
-          width: "30px",
-          height: "30px",
-          border: "none",
-          borderRadius: "var(--radius-sm)",
-          background: "var(--color-text-muted)",
-          color: "var(--color-btn-text)",
-          cursor: "pointer",
-          fontFamily: "var(--font-system)",
-          fontSize: "16px",
-          fontWeight: 600,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          flexShrink: 0,
-          transition: "opacity 0.1s",
-        }}
-        onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.8")}
-        onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
-      >
-        +
-      </button>
+    <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+      <div style={{ display: "flex", gap: "6px" }}>
+        <input
+          ref={inputRef}
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && onAdd()}
+          placeholder={placeholder}
+          style={{
+            flex: 1,
+            height: "30px",
+            background: "var(--color-surface-hover)",
+            border: `1px solid ${error ? "#e53935" : "var(--color-border)"}`,
+            borderRadius: "var(--radius-sm)",
+            color: "var(--color-text)",
+            fontFamily: "var(--font-system)",
+            fontSize: "11px",
+            padding: "0 8px",
+            outline: "none",
+            userSelect: "text",
+          }}
+          onFocus={(e) => (e.currentTarget.style.borderColor = error ? "#e53935" : color)}
+          onBlur={(e) => (e.currentTarget.style.borderColor = error ? "#e53935" : "var(--color-border)")}
+        />
+        <button
+          onClick={onAdd}
+          style={{
+            width: "30px",
+            height: "30px",
+            border: "none",
+            borderRadius: "var(--radius-sm)",
+            background: "var(--color-text-muted)",
+            color: "var(--color-btn-text)",
+            cursor: "pointer",
+            fontFamily: "var(--font-system)",
+            fontSize: "16px",
+            fontWeight: 600,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            flexShrink: 0,
+            transition: "opacity 0.1s",
+          }}
+          onMouseEnter={(e) => (e.currentTarget.style.opacity = "0.8")}
+          onMouseLeave={(e) => (e.currentTarget.style.opacity = "1")}
+        >
+          +
+        </button>
+      </div>
+      {error && (
+        <span style={{ fontSize: "9px", color: "#e53935", padding: "0 2px" }}>{error}</span>
+      )}
     </div>
   );
 }

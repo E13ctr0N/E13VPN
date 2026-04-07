@@ -222,12 +222,18 @@ fn is_network_entry(s: &str) -> bool {
     s.parse::<IpAddr>().is_ok()
 }
 
-/// Валидация доменного имени по RFC 1035
+/// Валидация доменного имени / суффикса для маршрутизации.
+/// Допускает как полные домены (example.ru), так и TLD-суффиксы (ru)
+/// — после нормализации `.ru` → `ru`, sing-box domain_suffix корректно
+/// матчит все домены в этой зоне.
 fn is_valid_domain(s: &str) -> bool {
     if s.is_empty() || s.len() > 253 {
         return false;
     }
     let s = s.strip_suffix('.').unwrap_or(s);
+    if s.is_empty() {
+        return false;
+    }
     s.split('.').all(|label| {
         !label.is_empty()
             && label.len() <= 63
@@ -237,7 +243,8 @@ fn is_valid_domain(s: &str) -> bool {
     })
 }
 
-/// Нормализация записи маршрута: извлекает домен из URL, убирает trailing slash/пробелы
+/// Нормализация записи маршрута: извлекает домен из URL, убирает trailing slash/пробелы,
+/// убирает ведущую точку (.ru → ru) для корректной работы domain_suffix.
 fn normalize_entry(s: &str) -> String {
     let s = s.trim();
     // Если пользователь вставил URL вида https://example.com/path — извлекаем хост
@@ -247,16 +254,21 @@ fn normalize_entry(s: &str) -> String {
         let host = host.split(':').next().unwrap_or(host);
         return host.to_lowercase();
     }
-    s.trim_end_matches('/').to_lowercase()
+    let s = s.trim_end_matches('/').to_lowercase();
+    // *.ru → ru, .ru → ru — sing-box domain_suffix и так работает как суффикс-матч
+    let s = s.strip_prefix("*.").or_else(|| s.strip_prefix('.')).unwrap_or(&s).to_string();
+    s
 }
 
 /// Строит sing-box route rules.
-/// bypass      — домены/IP мимо VPN (direct)
-/// bypass_apps — процессы мимо VPN (direct)
+/// bypass       — домены/IP мимо VPN (direct)
+/// bypass_apps  — процессы мимо VPN (direct)
+/// server_host  — хост VPN-сервера (IP или домен), исключается из TUN
 /// Всё остальное идёт через proxy (final=proxy).
 fn build_route(
     bypass: &[String],
     bypass_apps: &[String],
+    server_host: &str,
     mode: &VpnMode,
 ) -> serde_json::Value {
     let mut rules: Vec<serde_json::Value> = Vec::new();
@@ -265,6 +277,11 @@ fn build_route(
     if *mode == VpnMode::Tun {
         rules.push(serde_json::json!({ "action": "sniff" }));
         rules.push(serde_json::json!({ "protocol": "dns", "action": "hijack-dns" }));
+    }
+
+    // VPN-сервер всегда идёт напрямую (предотвращает петлю в TUN-режиме)
+    if *mode == VpnMode::Tun && !server_host.is_empty() && server_host.parse::<IpAddr>().is_err() {
+        rules.push(serde_json::json!({ "domain": [server_host], "outbound": "direct" }));
     }
 
     // bypass sites → direct (с валидацией доменов по RFC 1035)
@@ -307,22 +324,32 @@ fn build_route(
 }
 
 /// DNS конфиг. В TUN — полный с bypass-правилами, в Proxy — минимальный для резолва.
-fn build_dns(bypass: &[String], mode: &VpnMode) -> serde_json::Value {
+fn build_dns(bypass: &[String], server_host: &str, mode: &VpnMode) -> serde_json::Value {
     let mut rules: Vec<serde_json::Value> = Vec::new();
 
-    if *mode == VpnMode::Tun && !bypass.is_empty() {
-        let norm: Vec<String> = bypass.iter().map(|s| normalize_entry(s)).collect();
-        let (_, domains): (Vec<_>, Vec<_>) =
-            norm.iter().partition(|s| is_network_entry(s));
-        let valid_domains: Vec<_> = domains
-            .into_iter()
-            .filter(|d| is_valid_domain(d))
-            .collect();
-        if !valid_domains.is_empty() {
+    if *mode == VpnMode::Tun {
+        // DNS для VPN-сервера — всегда через direct (предотвращает петлю резолва)
+        if !server_host.is_empty() && server_host.parse::<IpAddr>().is_err() {
             rules.push(serde_json::json!({
-                "domain_suffix": valid_domains,
+                "domain": [server_host],
                 "server": "dns-direct"
             }));
+        }
+
+        if !bypass.is_empty() {
+            let norm: Vec<String> = bypass.iter().map(|s| normalize_entry(s)).collect();
+            let (_, domains): (Vec<_>, Vec<_>) =
+                norm.iter().partition(|s| is_network_entry(s));
+            let valid_domains: Vec<_> = domains
+                .into_iter()
+                .filter(|d| is_valid_domain(d))
+                .collect();
+            if !valid_domains.is_empty() {
+                rules.push(serde_json::json!({
+                    "domain_suffix": valid_domains,
+                    "server": "dns-direct"
+                }));
+            }
         }
     }
 
@@ -477,13 +504,13 @@ pub fn generate_singbox_config(
 
     let config = serde_json::json!({
         "log": { "level": "info", "timestamp": true },
-        "dns": build_dns(bypass, mode),
+        "dns": build_dns(bypass, &p.host, mode),
         "inbounds": inbound,
         "outbounds": [
             outbound,
             { "type": "direct", "tag": "direct" }
         ],
-        "route": build_route(bypass, bypass_apps, mode),
+        "route": build_route(bypass, bypass_apps, &p.host, mode),
         "experimental": {
             "clash_api": {
                 "external_controller": "127.0.0.1:9090"
@@ -493,6 +520,14 @@ pub fn generate_singbox_config(
 
     // clash_api в proxy-режиме тоже полезно для индикатора скорости
     config
+}
+
+/// Нормализует и валидирует запись маршрута.
+/// Возвращает (нормализованное_значение, валидно_ли).
+pub fn validate_route_entry(raw: &str) -> (String, bool) {
+    let norm = normalize_entry(raw);
+    let valid = !norm.is_empty() && (is_network_entry(&norm) || is_valid_domain(&norm));
+    (norm, valid)
 }
 
 /// HTTP-прокси на 127.0.0.1:2080
