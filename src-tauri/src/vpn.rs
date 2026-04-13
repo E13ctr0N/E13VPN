@@ -386,6 +386,8 @@ pub fn generate_singbox_config(
     bypass: &[String],
     bypass_apps: &[String],
     mode: &VpnMode,
+    proxy_port: u16,
+    clash_secret: &str,
 ) -> serde_json::Value {
     let tls = match p.security.as_str() {
         "reality" => serde_json::json!({
@@ -478,7 +480,7 @@ pub fn generate_singbox_config(
             "type": "mixed",
             "tag": "mixed-in",
             "listen": "127.0.0.1",
-            "listen_port": 2080
+            "listen_port": proxy_port
         }]),
         VpnMode::Tun => {
             // IPv4 → /32, IPv6 → /128, домен → пропускаем
@@ -514,7 +516,8 @@ pub fn generate_singbox_config(
         "route": build_route(bypass, bypass_apps, &server_host, mode),
         "experimental": {
             "clash_api": {
-                "external_controller": "127.0.0.1:9090"
+                "external_controller": "127.0.0.1:9090",
+                "secret": clash_secret
             }
         }
     });
@@ -531,8 +534,8 @@ pub fn validate_route_entry(raw: &str) -> (String, bool) {
     (norm, valid)
 }
 
-/// HTTP-прокси на 127.0.0.1:2080
-pub fn set_system_proxy(enable: bool) -> Result<(), String> {
+/// HTTP-прокси на 127.0.0.1:{port}
+pub fn set_system_proxy(enable: bool, port: u16) -> Result<(), String> {
     #[cfg(windows)]
     {
         use winreg::enums::*;
@@ -549,7 +552,7 @@ pub fn set_system_proxy(enable: bool) -> Result<(), String> {
                 .set_value("ProxyEnable", &1u32)
                 .map_err(|e| e.to_string())?;
             settings
-                .set_value("ProxyServer", &"127.0.0.1:2080")
+                .set_value("ProxyServer", &format!("127.0.0.1:{}", port))
                 .map_err(|e| e.to_string())?;
         } else {
             settings

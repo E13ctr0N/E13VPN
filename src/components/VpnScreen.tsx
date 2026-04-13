@@ -73,6 +73,15 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
   activeIdRef.current = activeId;
   vpnModeRef.current = vpnMode;
   const MAX_RECONNECT_ATTEMPTS = 10;
+  const clashSecretRef = useRef("");
+
+  // Listen for clash API params (secret + port) from backend
+  useEffect(() => {
+    const unlisten = listen<{ secret: string; port: number }>("clash-api-params", (e) => {
+      clashSecretRef.current = e.payload.secret;
+    });
+    return () => { unlisten.then((f) => f()); };
+  }, []);
 
   // Load store
   useEffect(() => {
@@ -113,7 +122,10 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
     async function streamTraffic() {
       while (!cancelled) {
         try {
-          const resp = await fetch("http://127.0.0.1:9090/traffic", { signal: controller.signal });
+          const headers: HeadersInit = clashSecretRef.current
+            ? { "Authorization": `Bearer ${clashSecretRef.current}` }
+            : {};
+          const resp = await fetch("http://127.0.0.1:9090/traffic", { signal: controller.signal, headers });
           const body = resp.body;
           if (!body) continue;
           reader = body.getReader();
