@@ -1,51 +1,51 @@
 # E13VPN
 
-Lightweight VPN client for Windows with Proxy and TUN modes. Built with Tauri v2, React 19, sing-box 1.13, Vite 7.
-
 Легковесный VPN-клиент для Windows с поддержкой VLESS+Reality.
 
+Построен на Tauri v2, React 19, sing-box 1.13, Vite 7.
+
 <p align="center">
-  <img src="screenshots/vpn-connected.png" width="420" alt="VPN connected">
-  <img src="screenshots/settings.png" width="420" alt="Settings">
+  <img src="screenshots/vpn-connected.png" width="420" alt="VPN подключен">
+  <img src="screenshots/settings.png" width="420" alt="Настройки">
 </p>
 
-## Features / Возможности
+## Возможности
 
-- **Proxy mode** — HTTP/SOCKS proxy on a randomized port
-- **TUN mode** — full system traffic through encrypted tunnel
-- Real-time speed indicator (download/upload)
-- Route bypass by domains, IP addresses, and applications
-- Auto-reconnect with exponential backoff and crash loop protection
-- VLESS config management with DPAPI encryption
-- Dark / Light theme
-- UI scaling (100% / 125% / 150%)
-- Russian / English interface
-- Autostart with Windows
-- System tray with dynamic icon
-- Single instance protection
-- sing-box log viewer with auto-scroll
-- Clash API secured with per-session secret
+- **Proxy-режим** — HTTP/SOCKS прокси на рандомном порту
+- **TUN-режим** — весь системный трафик через зашифрованный туннель
+- Индикатор скорости в реальном времени (загрузка/отдача)
+- Маршруты обхода по доменам, IP-адресам и приложениям
+- Автопереподключение с экспоненциальным backoff и защитой от бесконечного цикла
+- Управление VLESS-конфигами с шифрованием DPAPI
+- Тёмная / Светлая тема
+- Масштабирование интерфейса (100% / 125% / 150%)
+- Русский / Английский интерфейс
+- Автозапуск с Windows
+- Иконка в трее с динамическим статусом
+- Защита от запуска второго экземпляра
+- Просмотр логов sing-box с автопрокруткой
+- Clash API защищён сессионным секретом
 
-## Installation / Установка
+## Установка
 
-Download the latest release from [Releases](../../releases) — install `.msi` or run portable `.exe`.
+Скачайте последний релиз со страницы [Releases](../../releases) — установите `.msi` или запустите `.exe`.
 
-## Requirements / Требования
+## Требования
 
 - Windows 10+
-- Administrator privileges (for TUN mode)
+- Права администратора (для TUN-режима)
 
-## Build from source / Сборка
+## Сборка из исходников
 
 ```bash
 npm install
 npm run tauri build
 ```
 
-## Tech stack / Стек
+## Стек
 
-| Component | Version |
-|-----------|---------|
+| Компонент | Версия |
+|-----------|--------|
 | Tauri | v2 |
 | React | 19.1 |
 | sing-box | 1.13.3 |
@@ -53,6 +53,6 @@ npm run tauri build
 | TypeScript | 5.8 |
 | Tailwind CSS | 4.2 |
 
-## License
+## Лицензия
 
 MIT
