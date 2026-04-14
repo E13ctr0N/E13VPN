@@ -2,7 +2,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 
 const win = getCurrentWindow();
 
-export function Titlebar({ connected }: { connected?: boolean }) {
+const APP_VERSION = __APP_VERSION__;
+
+export function Titlebar({ connected, showVersion }: { connected?: boolean; showVersion?: boolean }) {
   return (
     <div
       data-tauri-drag-region
@@ -27,6 +29,11 @@ export function Titlebar({ connected }: { connected?: boolean }) {
         }}
       >
         E13VPN
+        {showVersion && (
+          <span style={{ fontSize: "10px", fontWeight: 400, color: "var(--color-text-ghost)", marginLeft: "6px" }}>
+            v{APP_VERSION}
+          </span>
+        )}
       </span>
 
       <div style={{ display: "flex", gap: "7px" }}>

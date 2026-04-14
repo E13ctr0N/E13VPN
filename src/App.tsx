@@ -100,7 +100,7 @@ function App() {
           overflow: "hidden",
         }}
       >
-        <Titlebar connected={connected} />
+        <Titlebar connected={connected} showVersion={tab === "settings"} />
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
           <div style={{ flex: 1, display: tab === "vpn" ? "flex" : "none", overflow: "hidden" }}>
             <VpnScreen
