@@ -119,6 +119,32 @@ fn random_secret() -> String {
     format!("{:016x}", h.finish())
 }
 
+const TUN_INTERFACE_NAME: &str = "E13VPN";
+
+/// Remove stale WinTUN adapter left after crash/force-kill.
+/// Without this, sing-box fails with "file already exists" on next TUN start.
+fn cleanup_stale_tun_adapter() {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        let script = format!(
+            r#"Get-PnpDevice -Class Net -Status Error,Unknown -EA SilentlyContinue |
+               Where-Object {{ $_.FriendlyName -match '{}|sing-tun|wintun' }} |
+               ForEach-Object {{ pnputil /remove-device $_.InstanceId }}"#,
+            TUN_INTERFACE_NAME
+        );
+        let _ = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-Command", &script])
+            .creation_flags(0x08000000)
+            .output();
+        // Also try removing by interface name (covers non-phantom adapters)
+        let _ = std::process::Command::new("netsh")
+            .args(["interface", "set", "interface", TUN_INTERFACE_NAME, "admin=disable"])
+            .creation_flags(0x08000000)
+            .output();
+    }
+}
+
 fn kill_orphan_singbox() {
     #[cfg(windows)]
     {
@@ -220,6 +246,9 @@ fn cleanup_vpn(state: &VpnState) {
     let port = *state.proxy_port.lock().unwrap_or_else(|e| e.into_inner());
     if mode == vpn::VpnMode::Proxy {
         let _ = vpn::set_system_proxy(false, port);
+    }
+    if mode == vpn::VpnMode::Tun {
+        cleanup_stale_tun_adapter();
     }
 }
 
@@ -463,9 +492,10 @@ async fn start_vpn(
     let max_attempts: u32 = if vpn_mode == vpn::VpnMode::Tun { 3 } else { 1 };
     let mut last_err = String::new();
 
-    // Pre-warm WinTUN: load driver into kernel before first attempt
+    // Pre-warm WinTUN: clean stale adapters + load driver into kernel before first attempt
     if vpn_mode == vpn::VpnMode::Tun {
         let _ = tauri::async_runtime::spawn_blocking(|| {
+            cleanup_stale_tun_adapter();
             #[cfg(windows)]
             {
                 use std::os::windows::process::CommandExt;
@@ -551,6 +581,7 @@ async fn stop_vpn(state: State<'_, VpnState>) -> Result<(), String> {
     }
     if mode == vpn::VpnMode::Tun && had_process {
         *state.last_tun_stop.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+        let _ = tauri::async_runtime::spawn_blocking(cleanup_stale_tun_adapter).await;
     }
     Ok(())
 }
@@ -636,11 +667,13 @@ fn cleanup_stale_proxy() {
 pub fn run() {
     #[cfg(windows)]
     cleanup_stale_proxy();
+    cleanup_stale_tun_adapter();
 
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = vpn::set_system_proxy(false, 0);
         kill_orphan_singbox();
+        cleanup_stale_tun_adapter();
         default_hook(info);
     }));
 
