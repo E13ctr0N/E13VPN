@@ -66,6 +66,7 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
   const manualDisconnect = useRef(false);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttempt = useRef(0);
+  const connectTimeRef = useRef<number | null>(null);
   const configsRef = useRef(configs);
   const activeIdRef = useRef(activeId);
   const vpnModeRef = useRef(vpnMode);
@@ -162,13 +163,22 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
       });
     });
     const unlistenTerm = listen<string>("singbox-terminated", (e) => {
+      // Capture uptime before clearing connectTime
+      const uptime = connectTimeRef.current ? Date.now() - connectTimeRef.current : 0;
       setConnected(false);
       setConnectTime(null);
+      connectTimeRef.current = null;
       invoke("update_tray_icon", { connected: false }).catch(() => {});
       setLogLines((prev) => [...prev, `[terminated] ${e.payload}`]);
 
       // Auto-reconnect with exponential backoff (3s, 6s, 12s... max 10 attempts)
       if (autoReconnect && !manualDisconnect.current) {
+        // Only reset attempt counter if connection was stable (>10s uptime).
+        // Prevents infinite reconnect loop when sing-box crashes immediately
+        // (e.g. port conflict, wintun issue, antivirus kill).
+        if (uptime > 10000) {
+          reconnectAttempt.current = 0;
+        }
         const attempt = reconnectAttempt.current;
         if (attempt >= MAX_RECONNECT_ATTEMPTS) {
           setLogLines((prev) => [...prev, `[auto-reconnect] gave up after ${MAX_RECONNECT_ATTEMPTS} attempts`]);
@@ -189,9 +199,10 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
               try {
                 setLogLines((prev) => [...prev, "[auto-reconnect] connecting..."]);
                 await invoke("start_vpn", { uri: cfg.uri, bypassVpn, bypassApps, mode: vpnModeRef.current });
+                const now = Date.now();
                 setConnected(true);
-                setConnectTime(Date.now());
-                reconnectAttempt.current = 0; // Reset on success
+                setConnectTime(now);
+                connectTimeRef.current = now;
                 invoke("update_tray_icon", { connected: true }).catch(() => {});
               } catch (err) {
                 setLogLines((prev) => [...prev, `[auto-reconnect] failed: ${String(err)}`]);
@@ -263,6 +274,7 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
       } catch {}
       setConnected(false);
       setConnectTime(null);
+      connectTimeRef.current = null;
       invoke("update_tray_icon", { connected: false }).catch(() => {});
       setBusy(false);
       return;
@@ -279,8 +291,11 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
         const bypassVpn = (await store.get<string[]>("routes_bypass")) ?? [];
         const bypassApps = (await store.get<string[]>("routes_bypass_apps")) ?? [];
         await invoke("start_vpn", { uri: cfg.uri, bypassVpn, bypassApps, mode: vpnMode });
+        const now = Date.now();
         setConnected(true);
-        setConnectTime(Date.now());
+        setConnectTime(now);
+        connectTimeRef.current = now;
+        reconnectAttempt.current = 0;
         invoke("update_tray_icon", { connected: true }).catch(() => {});
       } else {
         setBusy("disconnecting");
@@ -290,6 +305,7 @@ export function VpnScreen({ connected, setConnected, setLogLines, autoReconnect 
         await invoke("stop_vpn");
         setConnected(false);
         setConnectTime(null);
+        connectTimeRef.current = null;
         invoke("update_tray_icon", { connected: false }).catch(() => {});
       }
     } catch (e) {
