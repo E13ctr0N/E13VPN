@@ -88,8 +88,35 @@ struct VpnState {
     process: Mutex<Option<CommandChild>>,
     pid: Mutex<Option<u32>>,
     mode: Mutex<vpn::VpnMode>,
+    proxy_port: Mutex<u16>,
+    clash_secret: Mutex<String>,
     last_command: Mutex<Instant>,
     last_tun_stop: Mutex<Option<Instant>>,
+}
+
+fn random_port() -> u16 {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    let s = RandomState::new();
+    let mut h = s.build_hasher();
+    h.write_u64(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64);
+    // Range 49152-65535 (dynamic/private ports)
+    49152 + (h.finish() % (65535 - 49152 + 1)) as u16
+}
+
+fn random_secret() -> String {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    let s = RandomState::new();
+    let mut h = s.build_hasher();
+    h.write_u64(std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos() as u64);
+    format!("{:016x}", h.finish())
 }
 
 fn kill_orphan_singbox() {
@@ -190,8 +217,9 @@ fn cleanup_vpn(state: &VpnState) {
         graceful_kill_pid(pid);
     }
     let mode = state.mode.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let port = *state.proxy_port.lock().unwrap_or_else(|e| e.into_inner());
     if mode == vpn::VpnMode::Proxy {
-        let _ = vpn::set_system_proxy(false);
+        let _ = vpn::set_system_proxy(false, port);
     }
 }
 
@@ -213,6 +241,7 @@ async fn attempt_start_singbox(
     data_dir: &std::path::Path,
     vpn_mode: &vpn::VpnMode,
     timeout_secs: u64,
+    proxy_port: u16,
 ) -> StartOutcome {
     let mut cmd = match app.shell().sidecar("sing-box") {
         Ok(c) => c.args(["run", "-c", config_str]),
@@ -262,8 +291,9 @@ async fn attempt_start_singbox(
                         let current_pid = *st.pid.lock().unwrap_or_else(|e| e.into_inner());
                         if current_pid == Some(expected_pid) {
                             let mode = st.mode.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                            let port = *st.proxy_port.lock().unwrap_or_else(|e| e.into_inner());
                             if mode == vpn::VpnMode::Proxy {
-                                let _ = vpn::set_system_proxy(false);
+                                let _ = vpn::set_system_proxy(false, port);
                             }
                             let _ = st.process.lock().unwrap_or_else(|e| e.into_inner()).take();
                             let _ = st.pid.lock().unwrap_or_else(|e| e.into_inner()).take();
@@ -286,7 +316,7 @@ async fn attempt_start_singbox(
         Ok(Ok(true)) => {
             // sing-box стартовал успешно
             if *vpn_mode == vpn::VpnMode::Proxy {
-                if let Err(e) = vpn::set_system_proxy(true) {
+                if let Err(e) = vpn::set_system_proxy(true, proxy_port) {
                     return StartOutcome::Crashed(e);
                 }
             }
@@ -341,9 +371,22 @@ async fn start_vpn(
     }
 
     let params = vpn::parse_vless_uri(&uri)?;
+
+    // Generate random port and secret for each session
+    let proxy_port = random_port();
+    let clash_secret = random_secret();
+    *state.proxy_port.lock().unwrap_or_else(|e| e.into_inner()) = proxy_port;
+    *state.clash_secret.lock().unwrap_or_else(|e| e.into_inner()) = clash_secret.clone();
+
+    // Notify frontend about clash API secret for traffic monitoring
+    let _ = app.emit("clash-api-params", serde_json::json!({
+        "secret": clash_secret,
+        "port": proxy_port
+    }));
+
     let config_json =
         serde_json::to_string_pretty(&vpn::generate_singbox_config(
-            &params, &bypass_vpn, &bypass_apps, &vpn_mode,
+            &params, &bypass_vpn, &bypass_apps, &vpn_mode, proxy_port, &clash_secret,
         ))
         .map_err(|e| e.to_string())?;
 
@@ -450,7 +493,7 @@ async fn start_vpn(
                 format!("[tun-retry] attempt {}/{} (timeout {}s)...", attempt, max_attempts, timeout_secs));
         }
 
-        match attempt_start_singbox(&app, &state, &config_str, &data_dir, &vpn_mode, timeout_secs).await {
+        match attempt_start_singbox(&app, &state, &config_str, &data_dir, &vpn_mode, timeout_secs, proxy_port).await {
             StartOutcome::Ready => return Ok(()),
             StartOutcome::Crashed(e) => {
                 // sing-box died on its own — driver is now warm. Quick retry.
@@ -502,8 +545,9 @@ async fn stop_vpn(state: State<'_, VpnState>) -> Result<(), String> {
     if let Some(pid) = pid {
         let _ = tauri::async_runtime::spawn_blocking(move || graceful_kill_pid(pid)).await;
     }
+    let port = *state.proxy_port.lock().unwrap_or_else(|e| e.into_inner());
     if mode == vpn::VpnMode::Proxy {
-        vpn::set_system_proxy(false)?;
+        vpn::set_system_proxy(false, port)?;
     }
     if mode == vpn::VpnMode::Tun && had_process {
         *state.last_tun_stop.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
@@ -578,8 +622,12 @@ fn cleanup_stale_proxy() {
     if let Ok(settings) = hkcu.open_subkey_with_flags(path, KEY_READ) {
         let enabled: u32 = settings.get_value("ProxyEnable").unwrap_or(0);
         let server: String = settings.get_value("ProxyServer").unwrap_or_default();
-        if enabled == 1 && server == "127.0.0.1:2080" {
-            let _ = vpn::set_system_proxy(false);
+        if enabled == 1 && server.starts_with("127.0.0.1:") {
+            // Parse port from stale proxy to pass to cleanup
+            let port = server.strip_prefix("127.0.0.1:")
+                .and_then(|p| p.parse::<u16>().ok())
+                .unwrap_or(2080);
+            let _ = vpn::set_system_proxy(false, port);
         }
     }
 }
@@ -591,7 +639,7 @@ pub fn run() {
 
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = vpn::set_system_proxy(false);
+        let _ = vpn::set_system_proxy(false, 0);
         kill_orphan_singbox();
         default_hook(info);
     }));
@@ -601,6 +649,8 @@ pub fn run() {
             process: Mutex::new(None),
             pid: Mutex::new(None),
             mode: Mutex::new(vpn::VpnMode::Proxy),
+            proxy_port: Mutex::new(0),
+            clash_secret: Mutex::new(String::new()),
             last_command: Mutex::new(Instant::now() - Duration::from_secs(1)),
             last_tun_stop: Mutex::new(None),
         })
